@@ -15,6 +15,7 @@ RUN pnpm install --frozen-lockfile=false
 COPY packages/shared ./packages/shared
 COPY packages/agent ./packages/agent
 RUN pnpm --filter @hermes/shared prisma:generate
+RUN pnpm --filter @hermes/shared build
 RUN pnpm --filter @hermes/agent build
 
 FROM base AS runtime
