@@ -16,8 +16,38 @@ import { executeTask } from "./task.js";
 import { executeShopping } from "./shopping.js";
 import { executeNote } from "./note.js";
 import { executeFlowradLog } from "./flowrad-log.js";
+import { searchDrive, readDriveFile } from "../lib/drive.js";
+import { googleConfigured } from "../lib/google.js";
 
 export const SKILL_TOOLS: ToolDef[] = [
+  {
+    type: "function",
+    function: {
+      name: "search_drive",
+      description:
+        "Search Sanyam's Google Drive by keyword. Use when the input references a document by name, or when you need context from existing files (e.g. 'check my CESR portfolio doc').",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          limit: { type: "number", default: 10 },
+        },
+        required: ["query"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_drive_file",
+      description: "Read the text contents of a Drive file by id (returned from search_drive).",
+      parameters: {
+        type: "object",
+        properties: { fileId: { type: "string" } },
+        required: ["fileId"],
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -149,6 +179,26 @@ export async function executeTool(
     throw new Error(`Tool ${name} got invalid JSON args: ${rawArgs}`);
   }
   switch (name) {
+    case "search_drive": {
+      if (!googleConfigured()) {
+        return { skill: "note", recordId: "", summary: "(Drive not configured — skipping)" };
+      }
+      const q = (args as { query: string; limit?: number }).query;
+      const lim = (args as { limit?: number }).limit ?? 10;
+      const hits = await searchDrive(q, lim);
+      return {
+        skill: "note",
+        recordId: "",
+        summary: `Drive results: ${JSON.stringify(hits)}`,
+      };
+    }
+    case "read_drive_file": {
+      if (!googleConfigured()) {
+        return { skill: "note", recordId: "", summary: "(Drive not configured — skipping)" };
+      }
+      const text = await readDriveFile((args as { fileId: string }).fileId);
+      return { skill: "note", recordId: "", summary: text };
+    }
     case "create_calendar_event":
       return executeCalendar(CalendarData.parse(args), captureId);
     case "create_bill":

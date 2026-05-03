@@ -3,10 +3,14 @@ import { Hono } from "hono";
 import { env } from "@hermes/shared/env";
 import { logger } from "./lib/logger.js";
 import { startTelegram, stopTelegram } from "./channels/telegram.js";
+import { startGmail, stopGmail } from "./channels/gmail.js";
 import { httpRoutes } from "./channels/http.js";
+import { dashboard } from "./channels/dashboard.js";
+import { startSchedulers, stopSchedulers } from "./crons/scheduler.js";
 
 const app = new Hono();
 app.route("/", httpRoutes);
+app.route("/", dashboard);
 
 const port = env.PORT;
 const server = serve({ fetch: app.fetch, port }, (info) => {
@@ -14,10 +18,14 @@ const server = serve({ fetch: app.fetch, port }, (info) => {
 });
 
 startTelegram();
+startGmail();
+startSchedulers();
 
 const shutdown = (sig: string) => {
   logger.info({ sig }, "shutting down");
   stopTelegram();
+  stopGmail();
+  stopSchedulers();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(1), 5000).unref();
 };

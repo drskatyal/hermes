@@ -13,6 +13,7 @@
     "@hermes/shared": "workspace:*",
     "@hono/node-server": "^1.13.7",
     "@prisma/client": "^5.22.0",
+    "googleapis": "^171.4.0",
     "hono": "^4.6.14",
     "node-telegram-bot-api": "^0.66.0",
     "pino": "^9.5.0",
