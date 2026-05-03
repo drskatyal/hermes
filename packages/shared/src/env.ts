@@ -28,6 +28,7 @@ const EnvSchema = z.object({
   VAPID_SUBJECT: z.string().optional().default("mailto:drskatyal@gmail.com"),
 
   INTERNAL_API_KEY: z.string().optional().default(""),
+  DASHBOARD_PASSWORD: z.string().optional().default(""),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

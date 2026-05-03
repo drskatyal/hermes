@@ -10,8 +10,13 @@ export const dashboard = new Hono();
 
 const COOKIE = "hermes_session";
 
+function dashboardPassword(): string {
+  return env.DASHBOARD_PASSWORD || env.INTERNAL_API_KEY;
+}
+
 function requireAuth(c: import("hono").Context): boolean {
-  return getCookie(c, COOKIE) === env.INTERNAL_API_KEY && env.INTERNAL_API_KEY.length > 0;
+  const expected = dashboardPassword();
+  return expected.length > 0 && getCookie(c, COOKIE) === expected;
 }
 
 const LOGIN_HTML = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Hermes</title></head>
@@ -29,8 +34,9 @@ dashboard.get("/login", (c) => c.html(LOGIN_HTML));
 dashboard.post("/login", async (c) => {
   const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
   const key = typeof form.key === "string" ? form.key : "";
-  if (!env.INTERNAL_API_KEY || key !== env.INTERNAL_API_KEY) {
-    return c.html(LOGIN_HTML.replace("</form>", "</form><p style='color:#f87171;margin-top:16px'>Invalid key</p>"), 401);
+  const expected = dashboardPassword();
+  if (!expected || key !== expected) {
+    return c.html(LOGIN_HTML.replace("</form>", "</form><p style='color:#f87171;margin-top:16px'>Invalid password</p>"), 401);
   }
   setCookie(c, COOKIE, key, {
     httpOnly: true,
@@ -162,69 +168,141 @@ const HTML = `<!doctype html>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Hermes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
-</head><body class="bg-zinc-950 text-zinc-100 min-h-screen">
-<div class="max-w-3xl mx-auto p-4 space-y-4">
-  <header class="flex items-center justify-between">
-    <h1 class="text-2xl font-semibold">Hermes</h1>
-    <span id="status" class="text-xs text-zinc-500">loading…</span>
-  </header>
-
-  <section class="bg-zinc-900 rounded-2xl p-3 space-y-2">
-    <form id="capture" class="flex gap-2">
-      <input id="capture-text" class="flex-1 bg-zinc-800 rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-violet-500" placeholder="Capture or ask Hermes…" autofocus/>
-      <button class="bg-violet-600 hover:bg-violet-500 px-3 rounded-lg font-medium">Send</button>
-      <button id="ask-btn" type="button" class="bg-zinc-700 hover:bg-zinc-600 px-3 rounded-lg">Ask</button>
-    </form>
-    <pre id="reply" class="text-sm text-zinc-300 whitespace-pre-wrap"></pre>
-  </section>
-
-  <section id="today" class="bg-zinc-900 rounded-2xl p-4">
-    <h2 class="font-semibold mb-2 flex items-center gap-2">📅 Today & week</h2>
-    <ul id="events-list" class="text-sm space-y-1"></ul>
-  </section>
-
-  <section class="bg-zinc-900 rounded-2xl p-4">
-    <h2 class="font-semibold mb-2">⏰ Reminders</h2>
-    <ul id="reminders-list" class="text-sm space-y-1"></ul>
-  </section>
-
-  <section class="bg-zinc-900 rounded-2xl p-4">
-    <h2 class="font-semibold mb-2">💷 Bills</h2>
-    <ul id="bills-list" class="text-sm space-y-1"></ul>
-  </section>
-
-  <section class="bg-zinc-900 rounded-2xl p-4">
-    <h2 class="font-semibold mb-2">✅ Tasks</h2>
-    <ul id="tasks-list" class="text-sm space-y-1"></ul>
-  </section>
-
-  <section class="bg-zinc-900 rounded-2xl p-4">
-    <h2 class="font-semibold mb-2">🛒 Shopping</h2>
-    <ul id="shopping-list" class="text-sm space-y-1"></ul>
-  </section>
-
-  <section class="bg-zinc-900 rounded-2xl p-4">
-    <h2 class="font-semibold mb-2">📝 Recent notes</h2>
-    <ul id="notes-list" class="text-sm space-y-2"></ul>
-  </section>
-
-  <section class="bg-zinc-900 rounded-2xl p-4 space-y-3">
-    <div class="flex items-center justify-between">
-      <h2 class="font-semibold">🤖 Agents</h2>
-      <button id="gen-toggle" class="text-xs bg-violet-600 hover:bg-violet-500 px-2 py-1 rounded">+ Generate new</button>
-    </div>
-    <p class="text-xs text-zinc-500">Specialist subagents Hermes can delegate to. The orchestrator picks one when its charter cleanly fits.</p>
-    <ul id="agents-list" class="text-sm space-y-1"></ul>
-    <div id="gen-form" class="hidden space-y-2 pt-2 border-t border-zinc-800">
-      <textarea id="gen-desc" rows="3" class="w-full bg-zinc-800 rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-violet-500" placeholder="Describe the new agent's purpose. E.g. 'A CESR Coach that tracks competency gaps and asks weekly progress prompts'."></textarea>
-      <div class="flex gap-2">
-        <button id="gen-preview" class="bg-zinc-700 hover:bg-zinc-600 px-3 py-1 rounded text-sm">Preview</button>
-        <button id="gen-save" class="bg-violet-600 hover:bg-violet-500 px-3 py-1 rounded text-sm">Generate &amp; save</button>
+<style>
+  body { font-family: "Inter", system-ui, -apple-system, sans-serif; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
+  .nav-item.active { background: linear-gradient(90deg, rgba(124,58,237,0.18), transparent); border-left: 2px solid #a78bfa; color: #f4f4f5; }
+  .nav-item { border-left: 2px solid transparent; }
+  .hero-grad { background: radial-gradient(circle at 0% 0%, rgba(124,58,237,0.18), transparent 60%), radial-gradient(circle at 100% 100%, rgba(56,189,248,0.10), transparent 60%); }
+  .pulse-dot { animation: p 2s infinite; }
+  @keyframes p { 0%,100% { opacity: 1 } 50% { opacity: 0.4 } }
+</style>
+</head><body class="bg-zinc-950 text-zinc-100 min-h-screen antialiased">
+<div class="flex min-h-screen">
+  <!-- SIDEBAR -->
+  <aside class="hidden md:flex w-60 shrink-0 flex-col border-r border-zinc-900 bg-zinc-950/80 backdrop-blur sticky top-0 h-screen">
+    <div class="px-5 py-5 border-b border-zinc-900">
+      <div class="flex items-center gap-2">
+        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-600 grid place-items-center font-bold">H</div>
+        <div>
+          <div class="font-semibold leading-tight">Hermes</div>
+          <div class="text-[11px] text-zinc-500 leading-tight">personal assistant</div>
+        </div>
       </div>
-      <pre id="gen-out" class="text-xs text-zinc-400 whitespace-pre-wrap"></pre>
     </div>
-  </section>
+    <nav class="flex-1 py-3 text-sm">
+      <a href="#today" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">📅 <span>Today</span></a>
+      <a href="#bills" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">💷 <span>Bills</span><span id="badge-bills" class="ml-auto text-[10px] bg-zinc-800 text-zinc-400 rounded-full px-1.5 hidden"></span></a>
+      <a href="#tasks" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">✅ <span>Tasks</span><span id="badge-tasks" class="ml-auto text-[10px] bg-zinc-800 text-zinc-400 rounded-full px-1.5 hidden"></span></a>
+      <a href="#reminders" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">⏰ <span>Reminders</span><span id="badge-reminders" class="ml-auto text-[10px] bg-zinc-800 text-zinc-400 rounded-full px-1.5 hidden"></span></a>
+      <a href="#shopping" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">🛒 <span>Shopping</span><span id="badge-shopping" class="ml-auto text-[10px] bg-zinc-800 text-zinc-400 rounded-full px-1.5 hidden"></span></a>
+      <a href="#notes" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">📝 <span>Notes</span></a>
+      <div class="px-5 mt-4 mb-2 text-[10px] uppercase tracking-wider text-zinc-600">Intelligence</div>
+      <a href="#agents" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">🤖 <span>Agents</span></a>
+      <a href="#ask" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">💬 <span>Ask Hermes</span></a>
+    </nav>
+    <div class="px-5 py-4 border-t border-zinc-900 text-xs text-zinc-500 flex items-center justify-between">
+      <span class="flex items-center gap-1.5"><span class="pulse-dot w-1.5 h-1.5 rounded-full bg-emerald-500"></span><span id="status">online</span></span>
+      <a href="/logout" class="hover:text-zinc-300">sign out</a>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="flex-1 min-w-0">
+    <div class="max-w-4xl mx-auto px-4 md:px-8 py-6 md:py-10 space-y-6">
+      <!-- HERO -->
+      <section class="hero-grad rounded-3xl border border-zinc-900 p-6 md:p-8">
+        <div class="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <div class="text-xs uppercase tracking-wider text-violet-300/70 mb-1" id="hero-date">—</div>
+            <h1 class="text-2xl md:text-3xl font-semibold" id="hero-greeting">Hermes</h1>
+            <p class="text-sm text-zinc-400 mt-1" id="hero-summary">loading your day…</p>
+          </div>
+          <div class="flex gap-2 text-xs">
+            <div class="bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2"><div class="text-zinc-500">today</div><div class="text-lg font-semibold" id="stat-events">0</div></div>
+            <div class="bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2"><div class="text-zinc-500">bills</div><div class="text-lg font-semibold" id="stat-bills">0</div></div>
+            <div class="bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2"><div class="text-zinc-500">tasks</div><div class="text-lg font-semibold" id="stat-tasks">0</div></div>
+          </div>
+        </div>
+        <!-- CAPTURE BAR -->
+        <form id="capture" class="mt-6 flex gap-2 items-stretch">
+          <div class="relative flex-1">
+            <input id="capture-text" autocomplete="off" autofocus
+              class="w-full bg-zinc-900/80 border border-zinc-800 rounded-xl px-4 py-3 pr-12 text-base outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
+              placeholder="Capture anything — or type a question and press Ask"/>
+            <span class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-600 text-xs hidden md:inline">⏎ to send</span>
+          </div>
+          <button class="bg-violet-600 hover:bg-violet-500 px-4 rounded-xl font-medium text-sm">Send</button>
+          <button id="ask-btn" type="button" class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 px-4 rounded-xl text-sm">Ask</button>
+        </form>
+        <pre id="reply" class="mt-3 text-sm text-zinc-300 whitespace-pre-wrap"></pre>
+      </section>
+
+      <!-- TODAY -->
+      <section id="today" class="space-y-3 scroll-mt-8">
+        <h2 class="text-xs uppercase tracking-wider text-zinc-500">📅 Today & next 7 days</h2>
+        <ul id="events-list" class="space-y-2"></ul>
+      </section>
+
+      <!-- BILLS -->
+      <section id="bills" class="space-y-3 scroll-mt-8">
+        <h2 class="text-xs uppercase tracking-wider text-zinc-500">💷 Bills</h2>
+        <ul id="bills-list" class="space-y-2"></ul>
+      </section>
+
+      <!-- TASKS -->
+      <section id="tasks" class="space-y-3 scroll-mt-8">
+        <h2 class="text-xs uppercase tracking-wider text-zinc-500">✅ Tasks</h2>
+        <ul id="tasks-list" class="space-y-2"></ul>
+      </section>
+
+      <!-- REMINDERS -->
+      <section id="reminders" class="space-y-3 scroll-mt-8">
+        <h2 class="text-xs uppercase tracking-wider text-zinc-500">⏰ Reminders</h2>
+        <ul id="reminders-list" class="space-y-2"></ul>
+      </section>
+
+      <!-- SHOPPING -->
+      <section id="shopping" class="space-y-3 scroll-mt-8">
+        <h2 class="text-xs uppercase tracking-wider text-zinc-500">🛒 Shopping</h2>
+        <ul id="shopping-list" class="space-y-2"></ul>
+      </section>
+
+      <!-- NOTES -->
+      <section id="notes" class="space-y-3 scroll-mt-8">
+        <h2 class="text-xs uppercase tracking-wider text-zinc-500">📝 Recent notes</h2>
+        <ul id="notes-list" class="space-y-2"></ul>
+      </section>
+
+      <!-- AGENTS -->
+      <section id="agents" class="space-y-3 scroll-mt-8">
+        <div class="flex items-center justify-between">
+          <h2 class="text-xs uppercase tracking-wider text-zinc-500">🤖 Specialist agents</h2>
+          <button id="gen-toggle" class="text-xs bg-violet-600 hover:bg-violet-500 px-3 py-1.5 rounded-lg font-medium">+ Generate new</button>
+        </div>
+        <p class="text-xs text-zinc-500">Subagents Hermes can delegate to. The orchestrator routes to whichever charter cleanly fits.</p>
+        <ul id="agents-list" class="space-y-2"></ul>
+        <div id="gen-form" class="hidden space-y-2 pt-3 border-t border-zinc-900">
+          <textarea id="gen-desc" rows="3" class="w-full bg-zinc-900/80 border border-zinc-800 rounded-xl px-4 py-3 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500" placeholder="Describe the new agent's purpose. E.g. 'A CESR Coach that tracks competency gaps and asks weekly progress prompts.'"></textarea>
+          <div class="flex gap-2">
+            <button id="gen-preview" class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 px-3 py-1.5 rounded-lg text-sm">Preview</button>
+            <button id="gen-save" class="bg-violet-600 hover:bg-violet-500 px-3 py-1.5 rounded-lg text-sm font-medium">Generate &amp; save</button>
+          </div>
+          <pre id="gen-out" class="text-xs text-zinc-400 whitespace-pre-wrap bg-zinc-900/40 rounded-lg p-3 max-h-72 overflow-auto"></pre>
+        </div>
+      </section>
+
+      <div id="ask" class="h-2"></div>
+      <div class="text-center text-xs text-zinc-700 pt-6">Hermes • Grok 4 Fast → Gemini 3 fallback</div>
+    </div>
+  </main>
 </div>
 
 <script>
@@ -232,28 +310,74 @@ const fmtDT = (s) => new Date(s).toLocaleString("en-GB", { weekday: "short", hou
 const fmtD = (s) => new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
 const J = (m, u, b) => fetch(u, { method: m, headers: { "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined }).then(r => r.json());
 
+const card = "bg-zinc-900/60 border border-zinc-800 rounded-xl px-4 py-3 hover:border-zinc-700 transition";
+const empty = (msg) => \`<li class="text-sm text-zinc-600 py-2">\${msg}</li>\`;
+
+function setBadge(id, n) {
+  const el = document.getElementById("badge-" + id);
+  if (!el) return;
+  if (n > 0) { el.textContent = n; el.classList.remove("hidden"); }
+  else el.classList.add("hidden");
+}
+
+function updateHero(s) {
+  const now = new Date();
+  const h = now.getHours();
+  const part = h < 5 ? "Up late" : h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : h < 22 ? "Good evening" : "Late night";
+  document.getElementById("hero-greeting").textContent = part + ", Sanyam";
+  document.getElementById("hero-date").textContent = now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
+  const todayEvs = s.events.filter(e => new Date(e.startsAt) < new Date(now.getTime() + 24*60*60*1000));
+  document.getElementById("stat-events").textContent = todayEvs.length;
+  document.getElementById("stat-bills").textContent = s.bills.length;
+  document.getElementById("stat-tasks").textContent = s.tasks.length;
+  const bits = [];
+  if (todayEvs.length) bits.push(\`\${todayEvs.length} event\${todayEvs.length>1?"s":""} today\`);
+  if (s.bills.length) bits.push(\`\${s.bills.length} bill\${s.bills.length>1?"s":""} pending\`);
+  if (s.tasks.length) bits.push(\`\${s.tasks.length} open task\${s.tasks.length>1?"s":""}\`);
+  document.getElementById("hero-summary").textContent = bits.length ? bits.join(" · ") : "nothing pressing — quiet day";
+}
+
 async function load() {
   const s = await J("GET", "/api/state");
   document.getElementById("status").textContent = "online";
+  updateHero(s);
+  setBadge("bills", s.bills.length);
+  setBadge("tasks", s.tasks.length);
+  setBadge("reminders", s.reminders.length);
+  setBadge("shopping", s.shopping.length);
+
   document.getElementById("events-list").innerHTML = s.events.length
-    ? s.events.map(e => \`<li>\${fmtDT(e.startsAt)} — \${e.title}\${e.location ? " @ " + e.location : ""}</li>\`).join("")
-    : "<li class='text-zinc-500'>nothing scheduled</li>";
+    ? s.events.map(e => \`<li class="\${card}"><div class="flex justify-between items-baseline gap-3"><div class="font-medium">\${e.title}</div><div class="text-xs text-zinc-500 shrink-0">\${fmtDT(e.startsAt)}</div></div>\${e.location ? \`<div class="text-xs text-zinc-500 mt-0.5">📍 \${e.location}</div>\` : ""}</li>\`).join("")
+    : empty("Nothing scheduled in the next 7 days.");
+
   document.getElementById("reminders-list").innerHTML = s.reminders.length
-    ? s.reminders.map(r => \`<li>\${fmtDT(r.remindAt)} — \${r.text}</li>\`).join("")
-    : "<li class='text-zinc-500'>none</li>";
+    ? s.reminders.map(r => \`<li class="\${card} flex justify-between items-center"><div><div>\${r.text}</div><div class="text-xs text-zinc-500 mt-0.5">\${fmtDT(r.remindAt)}</div></div></li>\`).join("")
+    : empty("No active reminders.");
+
   document.getElementById("bills-list").innerHTML = s.bills.length
-    ? s.bills.map(b => \`<li class="flex justify-between"><span>\${b.vendor} — \${b.currency}\${b.amount} (due \${fmtD(b.dueDate)})</span><button onclick="markPaid('\${b.id}')" class="text-xs bg-emerald-700 px-2 rounded">paid</button></li>\`).join("")
-    : "<li class='text-zinc-500'>none</li>";
+    ? s.bills.map(b => \`<li class="\${card} flex justify-between items-center"><div><div class="font-medium">\${b.vendor}</div><div class="text-xs text-zinc-500">\${b.currency}\${b.amount} · due \${fmtD(b.dueDate)}</div></div><button onclick="markPaid('\${b.id}')" class="text-xs bg-emerald-600/20 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-600/30 px-3 py-1.5 rounded-lg">mark paid</button></li>\`).join("")
+    : empty("All caught up — no unpaid bills.");
+
   document.getElementById("tasks-list").innerHTML = s.tasks.length
-    ? s.tasks.map(t => \`<li class="flex justify-between"><span>\${t.title}\${t.dueDate ? " (" + fmtD(t.dueDate) + ")" : ""}</span><button onclick="markDone('\${t.id}')" class="text-xs bg-emerald-700 px-2 rounded">done</button></li>\`).join("")
-    : "<li class='text-zinc-500'>none</li>";
+    ? s.tasks.map(t => \`<li class="\${card} flex justify-between items-center"><div><div>\${t.title}\${t.dueDate ? \` <span class="text-xs text-zinc-500">· \${fmtD(t.dueDate)}</span>\` : ""}</div></div><button onclick="markDone('\${t.id}')" class="text-xs bg-emerald-600/20 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-600/30 px-3 py-1.5 rounded-lg">done</button></li>\`).join("")
+    : empty("No open tasks.");
+
   document.getElementById("shopping-list").innerHTML = s.shopping.length
-    ? s.shopping.map(i => \`<li class="flex justify-between"><span>\${i.name}\${i.qty ? " × " + i.qty : ""}</span><button onclick="markBought('\${i.id}')" class="text-xs bg-emerald-700 px-2 rounded">got</button></li>\`).join("")
-    : "<li class='text-zinc-500'>nothing</li>";
+    ? s.shopping.map(i => \`<li class="\${card} flex justify-between items-center"><div>\${i.name}\${i.qty ? \` <span class="text-xs text-zinc-500">× \${i.qty}</span>\` : ""}</div><button onclick="markBought('\${i.id}')" class="text-xs bg-emerald-600/20 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-600/30 px-3 py-1.5 rounded-lg">got</button></li>\`).join("")
+    : empty("Shopping list is empty.");
+
   document.getElementById("notes-list").innerHTML = s.notes.length
-    ? s.notes.map(n => \`<li><div class="text-zinc-500 text-xs">\${fmtD(n.createdAt)}</div>\${n.content}</li>\`).join("")
-    : "<li class='text-zinc-500'>none</li>";
+    ? s.notes.map(n => \`<li class="\${card}"><div class="text-[11px] text-zinc-500 mb-0.5">\${fmtD(n.createdAt)}</div><div class="whitespace-pre-wrap text-sm">\${n.content}</div></li>\`).join("")
+    : empty("No notes yet.");
 }
+
+// nav active highlighting
+function syncNav() {
+  const hash = location.hash || "#today";
+  document.querySelectorAll(".nav-item").forEach(a => a.classList.toggle("active", a.getAttribute("href") === hash));
+}
+window.addEventListener("hashchange", syncNav);
+syncNav();
 window.markBought = async (id) => { await J("POST", "/api/shopping/" + id + "/buy"); load(); };
 window.markDone = async (id) => { await J("POST", "/api/task/" + id + "/done"); load(); };
 window.markPaid = async (id) => { await J("POST", "/api/bill/" + id + "/paid"); load(); };
