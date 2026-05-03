@@ -22,4 +22,4 @@ ENV NODE_ENV=production
 COPY --from=build /app /app
 WORKDIR /app/packages/agent
 EXPOSE 3000
-CMD ["sh", "-c", "pnpm --filter @hermes/shared prisma:deploy && node dist/index.js"]
+CMD ["sh", "-c", "cd /app/packages/shared && npx prisma db push --accept-data-loss --skip-generate && cd /app/packages/agent && node dist/index.js"]
