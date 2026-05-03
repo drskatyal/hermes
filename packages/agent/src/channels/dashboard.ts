@@ -13,13 +13,37 @@ function requireAuth(c: import("hono").Context): boolean {
   return getCookie(c, COOKIE) === env.INTERNAL_API_KEY && env.INTERNAL_API_KEY.length > 0;
 }
 
-dashboard.get("/login", (c) => {
-  const key = c.req.query("key");
-  if (!key || key !== env.INTERNAL_API_KEY) {
-    return c.html(`<html><body style="font-family:system-ui;padding:40px;background:#0a0a0a;color:#eee"><h2>Hermes</h2><form><label>Key: <input name="key" type="password" autofocus style="background:#222;color:#eee;border:1px solid #444;padding:6px"/></label> <button>Sign in</button></form></body></html>`);
+const LOGIN_HTML = `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"/><title>Hermes</title></head>
+<body style="font-family:system-ui;padding:40px;background:#0a0a0a;color:#eee;min-height:100vh">
+  <h2 style="margin:0 0 24px">Hermes</h2>
+  <form method="POST" action="/login" style="display:flex;gap:8px;max-width:420px">
+    <input name="key" type="password" autofocus required placeholder="access key"
+      style="flex:1;background:#222;color:#eee;border:1px solid #444;padding:10px;border-radius:6px"/>
+    <button style="background:#7c3aed;border:none;color:white;padding:10px 16px;border-radius:6px;cursor:pointer">Sign in</button>
+  </form>
+</body></html>`;
+
+dashboard.get("/login", (c) => c.html(LOGIN_HTML));
+
+dashboard.post("/login", async (c) => {
+  const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>);
+  const key = typeof form.key === "string" ? form.key : "";
+  if (!env.INTERNAL_API_KEY || key !== env.INTERNAL_API_KEY) {
+    return c.html(LOGIN_HTML.replace("</form>", "</form><p style='color:#f87171;margin-top:16px'>Invalid key</p>"), 401);
   }
-  setCookie(c, COOKIE, key, { httpOnly: true, secure: true, sameSite: "Lax", maxAge: 60 * 60 * 24 * 365, path: "/" });
+  setCookie(c, COOKIE, key, {
+    httpOnly: true,
+    secure: true,
+    sameSite: "Lax",
+    maxAge: 60 * 60 * 24 * 365,
+    path: "/",
+  });
   return c.redirect("/");
+});
+
+dashboard.get("/logout", (c) => {
+  setCookie(c, COOKIE, "", { httpOnly: true, secure: true, sameSite: "Lax", maxAge: 0, path: "/" });
+  return c.redirect("/login");
 });
 
 dashboard.use("/api/*", async (c, next) => {
