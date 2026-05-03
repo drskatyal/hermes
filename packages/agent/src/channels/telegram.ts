@@ -48,9 +48,18 @@ export function startTelegram(): void {
           logger.error({ err }, "telegram: failed to resolve voice file");
         }
       }
-    } else if (msg.photo) {
+    } else if (msg.photo && msg.photo.length > 0) {
       inputType = "photo";
       rawContent = msg.caption ?? "[photo]";
+      const largest = msg.photo[msg.photo.length - 1]!;
+      try {
+        const link = await bot!.getFileLink(largest.file_id);
+        (msg as unknown as { _imageUrl?: string })._imageUrl = link;
+        // also pass via audioUrl field which our pipeline reads as fallback
+        audioUrl = link;
+      } catch (err) {
+        logger.error({ err }, "telegram: failed to resolve photo file");
+      }
     } else if (msg.document) {
       inputType = "file";
       rawContent = msg.caption ?? `[file: ${msg.document.file_name}]`;
@@ -72,6 +81,7 @@ export function startTelegram(): void {
         userId,
         username: msg.from?.username,
         date: msg.date,
+        imageUrl: audioUrl && inputType === "photo" ? audioUrl : undefined,
       },
       reply,
     });

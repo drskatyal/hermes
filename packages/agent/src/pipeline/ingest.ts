@@ -3,6 +3,7 @@ import type { InboundCapture, ActionExecutionResult } from "@hermes/shared/types
 import { logger } from "../lib/logger.js";
 import { orchestrate } from "./orchestrator.js";
 import { transcribe } from "./transcribe.js";
+import { describeImage } from "../lib/vision.js";
 
 export type IngestResult =
   | { status: "processed"; captureId: string; actions: ActionExecutionResult[]; provider: string }
@@ -28,6 +29,14 @@ export async function ingest(input: InboundCapture): Promise<IngestResult> {
       text = await transcribe(input.audioUrl);
       await db.capture.update({ where: { id: capture.id }, data: { transcript: text } });
       log.info({ length: text.length }, "transcribed");
+    } else if (input.inputType === "photo") {
+      const photoUrl = (input.metadata?.imageUrl as string | undefined) ?? input.audioUrl;
+      if (photoUrl) {
+        const desc = await describeImage({ kind: "url", url: photoUrl });
+        text = `[Photo] ${desc}${input.rawContent && input.rawContent !== "[photo]" ? `\n\nCaption: ${input.rawContent}` : ""}`;
+        await db.capture.update({ where: { id: capture.id }, data: { transcript: text } });
+        log.info({ length: text.length }, "image described");
+      }
     }
 
     const result = await orchestrate({

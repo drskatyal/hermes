@@ -155,6 +155,28 @@ dashboard.delete("/api/subagents/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+dashboard.get("/api/drafts", async (c) => {
+  const list = await db.emailDraft.findMany({
+    where: { status: "pending" },
+    orderBy: { createdAt: "desc" },
+    take: 50,
+  });
+  return c.json(list);
+});
+
+dashboard.post("/api/draft/:id/discard", async (c) => {
+  const id = c.req.param("id");
+  await db.emailDraft.update({ where: { id }, data: { status: "discarded" } });
+  return c.json({ ok: true });
+});
+
+dashboard.post("/api/draft/:id/approve", async (c) => {
+  const id = c.req.param("id");
+  await db.emailDraft.update({ where: { id }, data: { status: "approved", approvedAt: new Date() } });
+  // TODO: when Gmail OAuth is set, send the email via gmail.users.messages.send and mark sent
+  return c.json({ ok: true, note: "Approved. Sending requires Gmail OAuth (see GOOGLE_OAUTH_SETUP.md)." });
+});
+
 dashboard.post("/api/bill/:id/paid", async (c) => {
   const id = c.req.param("id");
   await db.bill.update({ where: { id }, data: { paid: true, paidAt: new Date() } });
@@ -204,6 +226,7 @@ const HTML = `<!doctype html>
       <a href="#reminders" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">⏰ <span>Reminders</span><span id="badge-reminders" class="ml-auto text-[10px] bg-zinc-800 text-zinc-400 rounded-full px-1.5 hidden"></span></a>
       <a href="#shopping" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">🛒 <span>Shopping</span><span id="badge-shopping" class="ml-auto text-[10px] bg-zinc-800 text-zinc-400 rounded-full px-1.5 hidden"></span></a>
       <a href="#notes" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">📝 <span>Notes</span></a>
+      <a href="#drafts" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">📨 <span>Email triage</span><span id="badge-drafts" class="ml-auto text-[10px] bg-zinc-800 text-zinc-400 rounded-full px-1.5 hidden"></span></a>
       <div class="px-5 mt-4 mb-2 text-[10px] uppercase tracking-wider text-zinc-600">Intelligence</div>
       <a href="#agents" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">🤖 <span>Agents</span></a>
       <a href="#ask" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">💬 <span>Ask Hermes</span></a>
@@ -279,6 +302,12 @@ const HTML = `<!doctype html>
       <section id="notes" class="space-y-3 scroll-mt-8">
         <h2 class="text-xs uppercase tracking-wider text-zinc-500">📝 Recent notes</h2>
         <ul id="notes-list" class="space-y-2"></ul>
+      </section>
+
+      <!-- DRAFTS -->
+      <section id="drafts" class="space-y-3 scroll-mt-8">
+        <h2 class="text-xs uppercase tracking-wider text-zinc-500">📨 Email triage</h2>
+        <ul id="drafts-list" class="space-y-2"></ul>
       </section>
 
       <!-- AGENTS -->
@@ -440,8 +469,38 @@ document.getElementById("gen-save").onclick = async () => {
   }
 };
 
+async function loadDrafts() {
+  const list = await J("GET", "/api/drafts");
+  setBadge("drafts", list.length);
+  document.getElementById("drafts-list").innerHTML = list.length
+    ? list.map(d => {
+        const tone = d.triage === "URGENT_PING" ? "bg-rose-600/20 border-rose-700/40 text-rose-300"
+          : d.triage === "REPLY_NEEDED" ? "bg-amber-600/20 border-amber-700/40 text-amber-300"
+          : "bg-zinc-700/40 border-zinc-600/40 text-zinc-300";
+        return \`<li class="\${card}">
+          <div class="flex justify-between items-start gap-2">
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 mb-1"><span class="text-[10px] px-2 py-0.5 rounded-full border \${tone}">\${d.triage}</span><span class="text-xs text-zinc-500">\${fmtD(d.createdAt)}</span></div>
+              <div class="font-medium truncate">\${d.subject}</div>
+              <div class="text-xs text-zinc-500 truncate">from \${d.fromAddress}</div>
+              \${d.reasoning ? \`<div class="text-xs text-zinc-500 mt-1 italic">\${d.reasoning}</div>\` : ""}
+              \${d.draftReply ? \`<details class="mt-2"><summary class="text-xs text-violet-300 cursor-pointer">view drafted reply</summary><pre class="mt-2 text-xs text-zinc-300 whitespace-pre-wrap bg-zinc-950/60 rounded p-2">\${d.draftReply}</pre></details>\` : ""}
+            </div>
+            <div class="flex flex-col gap-1 shrink-0">
+              \${d.draftReply ? \`<button onclick="approveDraft('\${d.id}')" class="text-xs bg-emerald-600/20 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-600/30 px-3 py-1.5 rounded-lg">approve</button>\` : ""}
+              <button onclick="discardDraft('\${d.id}')" class="text-xs bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-zinc-200 px-3 py-1.5 rounded-lg">dismiss</button>
+            </div>
+          </div>
+        </li>\`;
+      }).join("")
+    : empty("No emails awaiting triage. (Forward to your assistant Gmail once OAuth is wired.)");
+}
+window.discardDraft = async (id) => { await J("POST", "/api/draft/" + id + "/discard"); loadDrafts(); };
+window.approveDraft = async (id) => { const r = await J("POST", "/api/draft/" + id + "/approve"); if (r.note) alert(r.note); loadDrafts(); };
+
 load();
 loadAgents();
-setInterval(load, 30000);
+loadDrafts();
+setInterval(() => { load(); loadDrafts(); }, 30000);
 </script>
 </body></html>`;

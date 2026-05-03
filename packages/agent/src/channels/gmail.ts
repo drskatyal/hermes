@@ -1,6 +1,7 @@
 import { gmailClient, googleConfigured } from "../lib/google.js";
 import { logger } from "../lib/logger.js";
 import { ingest } from "../pipeline/ingest.js";
+import { triageEmail } from "../pipeline/email-triage.js";
 import { env } from "@hermes/shared/env";
 
 let timer: NodeJS.Timeout | null = null;
@@ -57,6 +58,15 @@ async function pollOnce(): Promise<void> {
           // Hermes does NOT auto-reply emails per architecture rules.
         },
       });
+
+      // Run a separate triage classifier in parallel — produces a Draft for review.
+      triageEmail({
+        threadId: full.data.threadId ?? undefined,
+        messageId: m.id,
+        fromAddress: from,
+        subject,
+        body: body || snippet,
+      }).catch((err) => logger.error({ err: err instanceof Error ? err.message : String(err) }, "gmail: triage failed"));
 
       // Mark as read
       await gmail.users.messages.modify({

@@ -111,6 +111,22 @@ model PushSubscription {
   createdAt DateTime @default(now())
 }
 
+model EmailDraft {
+  id          String   @id @default(cuid())
+  threadId    String?
+  messageId   String?
+  fromAddress String
+  subject     String
+  bodySnippet String   // original email snippet
+  triage      String   // "URGENT_PING" | "REPLY_NEEDED" | "LOG_ONLY" | "IGNORE"
+  draftReply  String?  // Hermes-suggested reply, if REPLY_NEEDED
+  reasoning   String?  // why Grok classified this way
+  status      String   @default("pending") // "pending" | "approved" | "sent" | "discarded"
+  approvedAt  DateTime?
+  sentAt      DateTime?
+  createdAt   DateTime @default(now())
+}
+
 model Subagent {
   id           String   @id @default(cuid())
   name         String   @unique // snake_case, used as routing key

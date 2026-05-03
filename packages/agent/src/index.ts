@@ -6,10 +6,12 @@ import { startTelegram, stopTelegram } from "./channels/telegram.js";
 import { startGmail, stopGmail } from "./channels/gmail.js";
 import { httpRoutes } from "./channels/http.js";
 import { dashboard } from "./channels/dashboard.js";
+import { ical } from "./channels/ical.js";
 import { startSchedulers, stopSchedulers } from "./crons/scheduler.js";
 
 const app = new Hono();
 app.route("/", httpRoutes);
+app.route("/", ical);
 app.route("/", dashboard);
 
 const port = env.PORT;
