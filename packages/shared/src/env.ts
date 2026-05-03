@@ -29,6 +29,7 @@ const EnvSchema = z.object({
 
   INTERNAL_API_KEY: z.string().optional().default(""),
   DASHBOARD_PASSWORD: z.string().optional().default(""),
+  OAUTH_REDIRECT_URI: z.string().optional().default(""),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

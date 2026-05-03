@@ -19,8 +19,11 @@ function authed(c: import("hono").Context): boolean {
 }
 
 function redirectUri(c: import("hono").Context): string {
-  const url = new URL(c.req.url);
-  return `${url.protocol}//${url.host}/oauth/google/callback`;
+  const override = env.OAUTH_REDIRECT_URI;
+  if (override) return override;
+  const host = c.req.header("x-forwarded-host") ?? c.req.header("host") ?? "bot.sanyamkatyal.com";
+  const proto = c.req.header("x-forwarded-proto") ?? "https";
+  return `${proto}://${host}/oauth/google/callback`;
 }
 
 googleOauth.get("/oauth/google/start", (c) => {
