@@ -1,14 +1,11 @@
 import { db } from "@hermes/shared/db";
 import type { InboundCapture, ActionExecutionResult } from "@hermes/shared/types";
 import { logger } from "../lib/logger.js";
-import { classify } from "./classifier.js";
+import { orchestrate } from "./orchestrator.js";
 import { transcribe } from "./transcribe.js";
-import { executeAction } from "../skills/_registry.js";
-import { formatConfirmation } from "./confirmer.js";
 
 export type IngestResult =
-  | { status: "processed"; captureId: string; actions: ActionExecutionResult[] }
-  | { status: "clarification_requested"; captureId: string; question: string }
+  | { status: "processed"; captureId: string; actions: ActionExecutionResult[]; provider: string }
   | { status: "failed"; captureId: string; error: string };
 
 export async function ingest(input: InboundCapture): Promise<IngestResult> {
@@ -33,38 +30,28 @@ export async function ingest(input: InboundCapture): Promise<IngestResult> {
       log.info({ length: text.length }, "transcribed");
     }
 
-    const classification = await classify({
+    const result = await orchestrate({
       text,
       channel: input.channel,
       metadata: input.metadata,
+      captureId: capture.id,
     });
+    log.info({ provider: result.provider, rounds: result.rounds, actions: result.actions.length }, "orchestrated");
+
     await db.capture.update({
       where: { id: capture.id },
-      data: { classification: classification as object },
+      data: {
+        classification: {
+          provider: result.provider,
+          rounds: result.rounds,
+          actions: result.actions.map((a) => ({ skill: a.skill, recordId: a.recordId })),
+        } as object,
+        status: "processed",
+      },
     });
-    log.info({ confidence: classification.confidence, n: classification.actions.length }, "classified");
 
-    if (classification.confidence < 0.7 && classification.needsClarification) {
-      await input.reply(`❓ ${classification.needsClarification}`);
-      await db.capture.update({
-        where: { id: capture.id },
-        data: { status: "clarification_requested" },
-      });
-      return {
-        status: "clarification_requested",
-        captureId: capture.id,
-        question: classification.needsClarification,
-      };
-    }
-
-    const results: ActionExecutionResult[] = [];
-    for (const action of classification.actions) {
-      results.push(await executeAction(action, capture.id));
-    }
-
-    await input.reply(formatConfirmation(results));
-    await db.capture.update({ where: { id: capture.id }, data: { status: "processed" } });
-    return { status: "processed", captureId: capture.id, actions: results };
+    await input.reply(result.reply);
+    return { status: "processed", captureId: capture.id, actions: result.actions, provider: result.provider };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error({ err: msg }, "ingest failed");

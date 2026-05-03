@@ -6,10 +6,11 @@ const EnvSchema = z.object({
   DATABASE_URL: z.string().min(1),
   SANYAM_EMAIL: z.string().email().default("drskatyal@gmail.com"),
 
-  PORTKEY_API_KEY: z.string().optional().default(""),
-  PORTKEY_VIRTUAL_KEY_GEMINI: z.string().optional().default(""),
-  PORTKEY_VIRTUAL_KEY_GROK: z.string().optional().default(""),
-  LLM_PRIMARY: z.enum(["gemini", "grok"]).default("gemini"),
+  XAI_API_KEY: z.string().optional().default(""),
+  GEMINI_API_KEY: z.string().optional().default(""),
+  GROK_MODEL: z.string().default("grok-4-fast"),
+  GEMINI_MODEL: z.string().default("gemini-3-flash-latest"),
+  LLM_PRIMARY: z.enum(["grok", "gemini"]).default("grok"),
 
   SONIOX_API_KEY: z.string().optional().default(""),
 
