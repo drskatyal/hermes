@@ -4,6 +4,7 @@ import { db } from "@hermes/shared/db";
 import { env } from "@hermes/shared/env";
 import { ingest } from "../pipeline/ingest.js";
 import { runQuery } from "../pipeline/query.js";
+import { previewAndSave, generateSubagent, saveSubagent, SubagentSpec } from "../lib/agent-generator.js";
 
 export const dashboard = new Hono();
 
@@ -107,6 +108,47 @@ dashboard.post("/api/task/:id/done", async (c) => {
   return c.json({ ok: true });
 });
 
+dashboard.get("/api/subagents", async (c) => {
+  const list = await db.subagent.findMany({ orderBy: { name: "asc" } });
+  return c.json(list);
+});
+
+dashboard.post("/api/subagents/generate", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { description?: string; save?: boolean } | null;
+  if (!body?.description) return c.json({ error: "description required" }, 400);
+  try {
+    if (body.save === false) {
+      const spec = await generateSubagent(body.description);
+      return c.json({ spec, saved: false });
+    }
+    const saved = await previewAndSave(body.description);
+    return c.json({ spec: saved, saved: true });
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+  }
+});
+
+dashboard.post("/api/subagents", async (c) => {
+  const body = await c.req.json().catch(() => null);
+  const parsed = SubagentSpec.safeParse(body);
+  if (!parsed.success) return c.json({ error: "invalid spec", details: parsed.error.flatten() }, 400);
+  const saved = await saveSubagent(parsed.data, "manual");
+  return c.json(saved);
+});
+
+dashboard.patch("/api/subagents/:id", async (c) => {
+  const id = c.req.param("id");
+  const body = (await c.req.json().catch(() => ({}))) as { enabled?: boolean };
+  const updated = await db.subagent.update({ where: { id }, data: { enabled: body.enabled } });
+  return c.json(updated);
+});
+
+dashboard.delete("/api/subagents/:id", async (c) => {
+  const id = c.req.param("id");
+  await db.subagent.delete({ where: { id } });
+  return c.json({ ok: true });
+});
+
 dashboard.post("/api/bill/:id/paid", async (c) => {
   const id = c.req.param("id");
   await db.bill.update({ where: { id }, data: { paid: true, paidAt: new Date() } });
@@ -166,6 +208,23 @@ const HTML = `<!doctype html>
     <h2 class="font-semibold mb-2">📝 Recent notes</h2>
     <ul id="notes-list" class="text-sm space-y-2"></ul>
   </section>
+
+  <section class="bg-zinc-900 rounded-2xl p-4 space-y-3">
+    <div class="flex items-center justify-between">
+      <h2 class="font-semibold">🤖 Agents</h2>
+      <button id="gen-toggle" class="text-xs bg-violet-600 hover:bg-violet-500 px-2 py-1 rounded">+ Generate new</button>
+    </div>
+    <p class="text-xs text-zinc-500">Specialist subagents Hermes can delegate to. The orchestrator picks one when its charter cleanly fits.</p>
+    <ul id="agents-list" class="text-sm space-y-1"></ul>
+    <div id="gen-form" class="hidden space-y-2 pt-2 border-t border-zinc-800">
+      <textarea id="gen-desc" rows="3" class="w-full bg-zinc-800 rounded-lg px-3 py-2 outline-none focus:ring-1 focus:ring-violet-500" placeholder="Describe the new agent's purpose. E.g. 'A CESR Coach that tracks competency gaps and asks weekly progress prompts'."></textarea>
+      <div class="flex gap-2">
+        <button id="gen-preview" class="bg-zinc-700 hover:bg-zinc-600 px-3 py-1 rounded text-sm">Preview</button>
+        <button id="gen-save" class="bg-violet-600 hover:bg-violet-500 px-3 py-1 rounded text-sm">Generate &amp; save</button>
+      </div>
+      <pre id="gen-out" class="text-xs text-zinc-400 whitespace-pre-wrap"></pre>
+    </div>
+  </section>
 </div>
 
 <script>
@@ -216,7 +275,49 @@ document.getElementById("ask-btn").addEventListener("click", async () => {
   document.getElementById("reply").textContent = r.answer || JSON.stringify(r);
 });
 
+async function loadAgents() {
+  const list = await J("GET", "/api/subagents");
+  document.getElementById("agents-list").innerHTML = list.length
+    ? list.map(a => \`<li class="flex justify-between items-start gap-2 py-1">
+        <div>
+          <div class="font-medium">\${a.displayName} <span class="text-zinc-500 text-xs">(\${a.name})</span></div>
+          <div class="text-zinc-400 text-xs">\${a.description}</div>
+          <div class="text-zinc-500 text-xs mt-1">tools: \${a.allowedTools.join(", ") || "(none)"}\${a.enabled ? "" : " · disabled"}</div>
+        </div>
+        <div class="flex gap-1 shrink-0">
+          <button onclick="toggleAgent('\${a.id}', \${!a.enabled})" class="text-xs bg-zinc-700 px-2 rounded">\${a.enabled ? "disable" : "enable"}</button>
+          <button onclick="deleteAgent('\${a.id}')" class="text-xs bg-rose-700 px-2 rounded">x</button>
+        </div>
+      </li>\`).join("")
+    : "<li class='text-zinc-500'>No agents yet — click 'Generate new'.</li>";
+}
+window.toggleAgent = async (id, enabled) => { await J("PATCH", "/api/subagents/" + id, { enabled }); loadAgents(); };
+window.deleteAgent = async (id) => { if (!confirm("Delete this agent?")) return; await J("DELETE", "/api/subagents/" + id); loadAgents(); };
+
+document.getElementById("gen-toggle").onclick = () => {
+  document.getElementById("gen-form").classList.toggle("hidden");
+};
+document.getElementById("gen-preview").onclick = async () => {
+  const desc = document.getElementById("gen-desc").value.trim();
+  if (!desc) return;
+  document.getElementById("gen-out").textContent = "thinking…";
+  const r = await J("POST", "/api/subagents/generate", { description: desc, save: false });
+  document.getElementById("gen-out").textContent = JSON.stringify(r.spec, null, 2);
+};
+document.getElementById("gen-save").onclick = async () => {
+  const desc = document.getElementById("gen-desc").value.trim();
+  if (!desc) return;
+  document.getElementById("gen-out").textContent = "generating…";
+  const r = await J("POST", "/api/subagents/generate", { description: desc, save: true });
+  document.getElementById("gen-out").textContent = r.error ? "Error: " + r.error : "Saved: " + r.spec.name;
+  if (!r.error) {
+    document.getElementById("gen-desc").value = "";
+    loadAgents();
+  }
+};
+
 load();
+loadAgents();
 setInterval(load, 30000);
 </script>
 </body></html>`;

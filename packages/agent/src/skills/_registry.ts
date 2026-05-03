@@ -18,8 +18,25 @@ import { executeNote } from "./note.js";
 import { executeFlowradLog } from "./flowrad-log.js";
 import { searchDrive, readDriveFile } from "../lib/drive.js";
 import { googleConfigured } from "../lib/google.js";
+import { runSubagent } from "../lib/subagent-runner.js";
 
 export const SKILL_TOOLS: ToolDef[] = [
+  {
+    type: "function",
+    function: {
+      name: "delegate_to_subagent",
+      description:
+        "Hand off a focused task to a registered specialist subagent (e.g. cesr_coach, flowrad_strategist). Use ONLY when an active subagent's charter cleanly matches the task. The subagent runs its own LLM loop with its own tool subset and returns a single result.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Subagent routing name (snake_case)" },
+          task: { type: "string", description: "Self-contained task description for the subagent" },
+        },
+        required: ["name", "task"],
+      },
+    },
+  },
   {
     type: "function",
     function: {
@@ -179,6 +196,15 @@ export async function executeTool(
     throw new Error(`Tool ${name} got invalid JSON args: ${rawArgs}`);
   }
   switch (name) {
+    case "delegate_to_subagent": {
+      const a = args as { name: string; task: string };
+      const r = await runSubagent(a.name, a.task, captureId);
+      return {
+        skill: "note",
+        recordId: r.actions[0]?.recordId ?? "",
+        summary: `🤖 ${a.name}: ${r.reply}`,
+      };
+    }
     case "search_drive": {
       if (!googleConfigured()) {
         return { skill: "note", recordId: "", summary: "(Drive not configured — skipping)" };

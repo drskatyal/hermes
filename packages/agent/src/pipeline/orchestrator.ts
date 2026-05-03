@@ -22,7 +22,7 @@ const MAX_ROUNDS = 5;
 
 export async function orchestrate(input: OrchestratorInput): Promise<OrchestratorResult> {
   const messages: ChatMessage[] = [
-    { role: "system", content: systemPrompt() },
+    { role: "system", content: await systemPrompt() },
     {
       role: "user",
       content: JSON.stringify({

@@ -111,6 +111,19 @@ model PushSubscription {
   createdAt DateTime @default(now())
 }
 
+model Subagent {
+  id           String   @id @default(cuid())
+  name         String   @unique // snake_case, used as routing key
+  displayName  String
+  description  String   // one-liner for the orchestrator's "available agents" list
+  systemPrompt String
+  allowedTools String[] // names from the SKILL_TOOLS registry it can call
+  generatedBy  String?  // model that authored this agent
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
 model AuthToken {
   id        String    @id @default(cuid())
   token     String    @unique
