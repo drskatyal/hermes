@@ -1,0 +1,59 @@
+import { z } from "zod";
+
+const EnvSchema = z.object({
+  NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
+  PORT: z.coerce.number().default(3000),
+  DATABASE_URL: z.string().min(1),
+  SANYAM_EMAIL: z.string().email().default("drskatyal@gmail.com"),
+
+  PORTKEY_API_KEY: z.string().optional().default(""),
+  PORTKEY_VIRTUAL_KEY_GEMINI: z.string().optional().default(""),
+  PORTKEY_VIRTUAL_KEY_GROK: z.string().optional().default(""),
+  LLM_PRIMARY: z.enum(["gemini", "grok"]).default("gemini"),
+
+  SONIOX_API_KEY: z.string().optional().default(""),
+
+  TELEGRAM_BOT_TOKEN: z.string().optional().default(""),
+  TELEGRAM_ALLOWED_USER_IDS: z.string().optional().default(""),
+
+  GMAIL_CLIENT_ID: z.string().optional().default(""),
+  GMAIL_CLIENT_SECRET: z.string().optional().default(""),
+  GMAIL_REFRESH_TOKEN: z.string().optional().default(""),
+  GMAIL_ASSISTANT_ADDRESS: z.string().optional().default(""),
+
+  VAPID_PUBLIC_KEY: z.string().optional().default(""),
+  VAPID_PRIVATE_KEY: z.string().optional().default(""),
+  VAPID_SUBJECT: z.string().optional().default("mailto:drskatyal@gmail.com"),
+
+  INTERNAL_API_KEY: z.string().optional().default(""),
+});
+
+export type Env = z.infer<typeof EnvSchema>;
+
+let cached: Env | null = null;
+
+export function loadEnv(): Env {
+  if (cached) return cached;
+  const parsed = EnvSchema.safeParse(process.env);
+  if (!parsed.success) {
+    console.error("Invalid env:", parsed.error.flatten().fieldErrors);
+    throw new Error("Environment validation failed");
+  }
+  cached = parsed.data;
+  return cached;
+}
+
+export const env = new Proxy({} as Env, {
+  get(_target, prop: string) {
+    return loadEnv()[prop as keyof Env];
+  },
+});
+
+export function allowedTelegramIds(): number[] {
+  const raw = loadEnv().TELEGRAM_ALLOWED_USER_IDS;
+  if (!raw) return [];
+  return raw
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isFinite(n));
+}

@@ -1,0 +1,121 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Capture {
+  id             String   @id @default(cuid())
+  createdAt      DateTime @default(now())
+  channel        String
+  channelMsgId   String?
+  inputType      String
+  rawContent     String
+  rawMetadata    Json?
+  transcript     String?
+  classification Json?
+  status         String   @default("pending")
+  errorMessage   String?
+  actions        Action[]
+}
+
+model Action {
+  id             String   @id @default(cuid())
+  captureId      String
+  capture        Capture  @relation(fields: [captureId], references: [id])
+  skill          String
+  payload        Json
+  createdAt      DateTime @default(now())
+  eventId        String?
+  billId         String?
+  reminderId     String?
+  taskId         String?
+  shoppingItemId String?
+  noteId         String?
+}
+
+model Event {
+  id            String    @id @default(cuid())
+  title         String
+  description   String?
+  startsAt      DateTime
+  endsAt        DateTime?
+  location      String?
+  tags          String[]
+  googleEventId String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
+
+model Bill {
+  id              String    @id @default(cuid())
+  vendor          String
+  amount          Decimal   @db.Decimal(10, 2)
+  currency        String    @default("GBP")
+  dueDate         DateTime
+  paid            Boolean   @default(false)
+  paidAt          DateTime?
+  notes           String?
+  reminderEventId String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Reminder {
+  id        String    @id @default(cuid())
+  text      String
+  remindAt  DateTime
+  done      Boolean   @default(false)
+  doneAt    DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model Task {
+  id        String    @id @default(cuid())
+  title     String
+  details   String?
+  dueDate   DateTime?
+  done      Boolean   @default(false)
+  doneAt    DateTime?
+  tags      String[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model ShoppingItem {
+  id        String    @id @default(cuid())
+  name      String
+  qty       String?
+  bought    Boolean   @default(false)
+  boughtAt  DateTime?
+  createdAt DateTime  @default(now())
+}
+
+model Note {
+  id        String   @id @default(cuid())
+  content   String
+  tags      String[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  userAgent String?
+  createdAt DateTime @default(now())
+}
+
+model AuthToken {
+  id        String    @id @default(cuid())
+  token     String    @unique
+  email     String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
