@@ -7,6 +7,10 @@ import type { InboundCapture } from "@hermes/shared/types";
 let bot: TelegramBot | null = null;
 
 export function startTelegram(): void {
+  if (process.env.DISABLE_TELEGRAM_POLLING === "true") {
+    logger.warn("DISABLE_TELEGRAM_POLLING=true — Telegram polling skipped (Nous Hermes is the bot owner)");
+    return;
+  }
   const token = env.TELEGRAM_BOT_TOKEN;
   if (!token) {
     logger.warn("TELEGRAM_BOT_TOKEN not set — Telegram channel disabled");
