@@ -1,5 +1,7 @@
 import { db } from "@hermes/shared/db";
 import type { ActionExecutionResult, BillData } from "@hermes/shared/types";
+import { pushEventToGoogleCal } from "../lib/google-calendar.js";
+import { logger } from "../lib/logger.js";
 
 export async function executeBill(
   data: BillData,
@@ -31,6 +33,17 @@ export async function executeBill(
   await db.action.create({
     data: { captureId, skill: "bill", payload: data as object, billId: bill.id },
   });
+
+  // Push the reminder event to Google Calendar
+  pushEventToGoogleCal({
+    title: reminderEvent.title,
+    startsAt: reminderEvent.startsAt,
+    tags: ["bill"],
+  })
+    .then(async (gid) => {
+      if (gid) await db.event.update({ where: { id: reminderEvent.id }, data: { googleEventId: gid } });
+    })
+    .catch((err) => logger.warn({ err: err instanceof Error ? err.message : String(err) }, "bill reminder cal sync error"));
 
   const dueStr = due.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
   return {

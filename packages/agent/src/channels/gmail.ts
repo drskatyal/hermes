@@ -2,6 +2,7 @@ import { gmailClient, googleConfigured } from "../lib/google.js";
 import { logger } from "../lib/logger.js";
 import { ingest } from "../pipeline/ingest.js";
 import { triageEmail } from "../pipeline/email-triage.js";
+import { extractAttachment, isExtractableMime } from "../lib/attachments.js";
 import { env } from "@hermes/shared/env";
 
 let timer: NodeJS.Timeout | null = null;
@@ -25,6 +26,24 @@ function decodeBody(part: { body?: { data?: string | null } | null; parts?: any[
   return "";
 }
 
+type AttPart = {
+  filename?: string;
+  mimeType?: string;
+  body?: { attachmentId?: string | null; data?: string | null } | null;
+  parts?: AttPart[];
+};
+
+function collectAttachments(part: AttPart | undefined, out: AttPart[] = []): AttPart[] {
+  if (!part) return out;
+  if (part.filename && part.body?.attachmentId && part.mimeType && isExtractableMime(part.mimeType)) {
+    out.push(part);
+  }
+  if (part.parts) for (const p of part.parts) collectAttachments(p, out);
+  return out;
+}
+
+const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // 8MB cap per attachment
+
 async function pollOnce(): Promise<void> {
   const gmail = gmailClient();
   const list = await gmail.users.messages.list({
@@ -46,14 +65,43 @@ async function pollOnce(): Promise<void> {
       const from = h("From");
       const snippet = full.data.snippet ?? "";
       const body = decodeBody(full.data.payload as any);
-      const text = `Email from ${from}\nSubject: ${subject}\n\n${body || snippet}`.slice(0, 12000);
+
+      // Extract attachments via Gemini vision (PDFs + images)
+      const atts = collectAttachments(full.data.payload as AttPart);
+      const attachmentTexts: string[] = [];
+      for (const att of atts) {
+        if (!att.body?.attachmentId || !att.mimeType || !att.filename) continue;
+        try {
+          const data = await gmail.users.messages.attachments.get({
+            userId: "me",
+            messageId: m.id,
+            id: att.body.attachmentId,
+          });
+          const sizeBytes = (data.data.size as number | undefined) ?? 0;
+          if (sizeBytes > MAX_ATTACHMENT_BYTES) {
+            attachmentTexts.push(`[${att.filename}] (${att.mimeType}) — skipped (>${Math.round(MAX_ATTACHMENT_BYTES / 1024 / 1024)}MB)`);
+            continue;
+          }
+          const b64 = (data.data.data as string | undefined) ?? "";
+          if (!b64) continue;
+          const extracted = await extractAttachment({ filename: att.filename, mimeType: att.mimeType, base64: b64 });
+          attachmentTexts.push(`--- attachment: ${att.filename} (${att.mimeType}) ---\n${extracted}`);
+          logger.info({ filename: att.filename, mimeType: att.mimeType, length: extracted.length }, "gmail: attachment extracted");
+        } catch (err) {
+          logger.warn({ filename: att.filename, err: err instanceof Error ? err.message : String(err) }, "gmail: attachment extract failed");
+        }
+      }
+
+      const fullBody = body || snippet;
+      const attBlock = attachmentTexts.length ? `\n\n[ATTACHMENTS]\n${attachmentTexts.join("\n\n")}` : "";
+      const text = `Email from ${from}\nSubject: ${subject}\n\n${fullBody}${attBlock}`.slice(0, 32000);
 
       await ingest({
         channel: "gmail",
         channelMsgId: m.id,
         inputType: "email",
         rawContent: text,
-        metadata: { from, subject, threadId: full.data.threadId },
+        metadata: { from, subject, threadId: full.data.threadId, attachmentCount: atts.length },
         reply: async () => {
           // Hermes does NOT auto-reply emails per architecture rules.
         },
@@ -65,7 +113,7 @@ async function pollOnce(): Promise<void> {
         messageId: m.id,
         fromAddress: from,
         subject,
-        body: body || snippet,
+        body: `${fullBody}${attBlock}`,
       }).catch((err) => logger.error({ err: err instanceof Error ? err.message : String(err) }, "gmail: triage failed"));
 
       // Mark as read
