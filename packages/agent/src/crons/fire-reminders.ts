@@ -1,6 +1,7 @@
 import { db } from "@hermes/shared/db";
 import { env, allowedTelegramIds } from "@hermes/shared/env";
 import { logger } from "../lib/logger.js";
+import { ntfy } from "../lib/ntfy.js";
 
 async function sendTelegram(chatId: number, text: string): Promise<void> {
   if (!env.TELEGRAM_BOT_TOKEN) return;
@@ -30,6 +31,7 @@ export async function fireDueReminders(): Promise<void> {
         logger.error({ id, err }, "reminder send failed");
       }
     }
+    ntfy({ title: "⏰ Reminder", message: r.text, priority: 4, tags: ["alarm_clock"] }).catch(() => {});
     await db.reminder.update({ where: { id: r.id }, data: { done: true, doneAt: now } });
   }
   logger.info({ fired: due.length }, "reminders fired");

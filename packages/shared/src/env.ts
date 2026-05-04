@@ -30,6 +30,8 @@ const EnvSchema = z.object({
   INTERNAL_API_KEY: z.string().optional().default(""),
   DASHBOARD_PASSWORD: z.string().optional().default(""),
   OAUTH_REDIRECT_URI: z.string().optional().default(""),
+  NTFY_TOPIC: z.string().optional().default(""),
+  NTFY_SERVER: z.string().optional().default("https://ntfy.sh"),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

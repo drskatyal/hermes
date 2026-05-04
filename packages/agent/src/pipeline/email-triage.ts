@@ -3,6 +3,7 @@ import { db } from "@hermes/shared/db";
 import { env, allowedTelegramIds } from "@hermes/shared/env";
 import { chat } from "../lib/llm.js";
 import { logger } from "../lib/logger.js";
+import { ntfy } from "../lib/ntfy.js";
 
 const TriageOutput = z.object({
   triage: z.enum(["URGENT_PING", "REPLY_NEEDED", "LOG_ONLY", "IGNORE"]),
@@ -82,17 +83,28 @@ export async function triageEmail(meta: {
     logger.info({ triage: v.triage, subject: meta.subject }, "email triage: drafted");
 
     // Telegram alert for URGENT or REPLY_NEEDED via @Sanyamasstbot (Hermes Nous bot)
-    if ((v.triage === "URGENT_PING" || v.triage === "REPLY_NEEDED") && env.TELEGRAM_BOT_TOKEN) {
-      const ids = allowedTelegramIds();
+    if (v.triage === "URGENT_PING" || v.triage === "REPLY_NEEDED") {
       const emoji = v.triage === "URGENT_PING" ? "🚨" : "📨";
-      const msg = `${emoji} ${v.triage}: ${meta.subject}\nFrom: ${meta.fromAddress}\n\n${v.reasoning}\n\nDashboard: https://bot.sanyamkatyal.com/#drafts`;
-      for (const id of ids) {
-        fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: id, text: msg, disable_web_page_preview: true }),
-        }).catch((err) => logger.warn({ err: err instanceof Error ? err.message : String(err) }, "telegram alert failed"));
+      const summary = `${meta.subject} — from ${meta.fromAddress}`;
+      const msg = `${emoji} ${v.triage}\n${summary}\n\n${v.reasoning}\n\nDashboard: https://bot.sanyamkatyal.com/#drafts`;
+      // Telegram alert
+      if (env.TELEGRAM_BOT_TOKEN) {
+        for (const id of allowedTelegramIds()) {
+          fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: id, text: msg, disable_web_page_preview: true }),
+          }).catch((err) => logger.warn({ err: err instanceof Error ? err.message : String(err) }, "telegram alert failed"));
+        }
       }
+      // ntfy.sh native iOS push
+      ntfy({
+        title: `${emoji} ${v.triage}`,
+        message: summary,
+        priority: v.triage === "URGENT_PING" ? 5 : 4,
+        tags: v.triage === "URGENT_PING" ? ["rotating_light", "email"] : ["envelope"],
+        click: "https://bot.sanyamkatyal.com/#drafts",
+      }).catch(() => {});
     }
   } catch (err) {
     logger.error({ err: err instanceof Error ? err.message : String(err) }, "email triage failed");
