@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { db } from "@hermes/shared/db";
+import { env, allowedTelegramIds } from "@hermes/shared/env";
 import { chat } from "../lib/llm.js";
 import { logger } from "../lib/logger.js";
 
@@ -79,6 +80,20 @@ export async function triageEmail(meta: {
       },
     });
     logger.info({ triage: v.triage, subject: meta.subject }, "email triage: drafted");
+
+    // Telegram alert for URGENT or REPLY_NEEDED via @Sanyamasstbot (Hermes Nous bot)
+    if ((v.triage === "URGENT_PING" || v.triage === "REPLY_NEEDED") && env.TELEGRAM_BOT_TOKEN) {
+      const ids = allowedTelegramIds();
+      const emoji = v.triage === "URGENT_PING" ? "🚨" : "📨";
+      const msg = `${emoji} ${v.triage}: ${meta.subject}\nFrom: ${meta.fromAddress}\n\n${v.reasoning}\n\nDashboard: https://bot.sanyamkatyal.com/#drafts`;
+      for (const id of ids) {
+        fetch(`https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: id, text: msg, disable_web_page_preview: true }),
+        }).catch((err) => logger.warn({ err: err instanceof Error ? err.message : String(err) }, "telegram alert failed"));
+      }
+    }
   } catch (err) {
     logger.error({ err: err instanceof Error ? err.message : String(err) }, "email triage failed");
   }
