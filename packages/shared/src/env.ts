@@ -32,6 +32,8 @@ const EnvSchema = z.object({
   OAUTH_REDIRECT_URI: z.string().optional().default(""),
   NTFY_TOPIC: z.string().optional().default(""),
   NTFY_SERVER: z.string().optional().default("https://ntfy.sh"),
+  MISTRAL_API_KEY: z.string().optional().default(""),
+  VOXTRAL_MODEL: z.string().default("voxtral-mini-latest"),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
