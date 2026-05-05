@@ -5,6 +5,7 @@ import { env } from "@hermes/shared/env";
 import { ingest } from "../pipeline/ingest.js";
 import { runQuery } from "../pipeline/query.js";
 import { previewAndSave, generateSubagent, saveSubagent, SubagentSpec } from "../lib/agent-generator.js";
+import { transcribeWithVoxtral } from "../lib/voxtral.js";
 
 export const dashboard = new Hono();
 
@@ -64,13 +65,15 @@ dashboard.use("/", async (c, next) => {
 });
 
 dashboard.get("/api/state", async (c) => {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const weekEnd = new Date(start);
-  weekEnd.setDate(weekEnd.getDate() + 7);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const start = new Date(today);
+  start.setDate(start.getDate() - 14);
+  const end = new Date(today);
+  end.setDate(end.getDate() + 60);
 
   const [events, bills, reminders, tasks, shopping, notes] = await Promise.all([
-    db.event.findMany({ where: { startsAt: { gte: start, lt: weekEnd } }, orderBy: { startsAt: "asc" } }),
+    db.event.findMany({ where: { startsAt: { gte: start, lt: end } }, orderBy: { startsAt: "asc" } }),
     db.bill.findMany({ where: { paid: false }, orderBy: { dueDate: "asc" } }),
     db.reminder.findMany({ where: { done: false }, orderBy: { remindAt: "asc" } }),
     db.task.findMany({ where: { done: false }, orderBy: { createdAt: "desc" }, take: 30 }),
@@ -93,6 +96,32 @@ dashboard.post("/api/capture", async (c) => {
     },
   });
   return c.json({ ...result, reply: replies.join("\n") });
+});
+
+dashboard.post("/api/capture/audio", async (c) => {
+  const form = await c.req.parseBody().catch(() => null);
+  const file = form?.file;
+  if (!file || typeof file === "string" || !(file instanceof File)) {
+    return c.json({ error: "file required" }, 400);
+  }
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const text = await transcribeWithVoxtral({
+    buffer,
+    filename: file.name || "recording.webm",
+    mimeType: file.type || "audio/webm",
+    language: "en",
+  });
+  if (!text.trim()) return c.json({ error: "empty transcript" }, 400);
+  const replies: string[] = [];
+  const result = await ingest({
+    channel: "pwa",
+    inputType: "voice",
+    rawContent: text,
+    reply: async (t) => {
+      replies.push(t);
+    },
+  });
+  return c.json({ ...result, transcript: text, reply: replies.join("\n") });
 });
 
 dashboard.post("/api/query", async (c) => {
@@ -173,7 +202,6 @@ dashboard.post("/api/draft/:id/discard", async (c) => {
 dashboard.post("/api/draft/:id/approve", async (c) => {
   const id = c.req.param("id");
   await db.emailDraft.update({ where: { id }, data: { status: "approved", approvedAt: new Date() } });
-  // TODO: when Gmail OAuth is set, send the email via gmail.users.messages.send and mark sent
   return c.json({ ok: true, note: "Approved. Sending requires Gmail OAuth (see GOOGLE_OAUTH_SETUP.md)." });
 });
 
@@ -186,7 +214,8 @@ dashboard.post("/api/bill/:id/paid", async (c) => {
 dashboard.get("/", (c) => c.html(HTML));
 
 const HTML = `<!doctype html>
-<html lang="en"><head>
+<html lang="en">
+<head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>Hermes</title>
@@ -195,312 +224,369 @@ const HTML = `<!doctype html>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
-  body { font-family: "Inter", system-ui, -apple-system, sans-serif; }
-  ::-webkit-scrollbar { width: 8px; height: 8px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: #27272a; border-radius: 4px; }
-  ::-webkit-scrollbar-thumb:hover { background: #3f3f46; }
-  .nav-item.active { background: linear-gradient(90deg, rgba(124,58,237,0.18), transparent); border-left: 2px solid #a78bfa; color: #f4f4f5; }
-  .nav-item { border-left: 2px solid transparent; }
-  .hero-grad { background: radial-gradient(circle at 0% 0%, rgba(124,58,237,0.18), transparent 60%), radial-gradient(circle at 100% 100%, rgba(56,189,248,0.10), transparent 60%); }
-  .pulse-dot { animation: p 2s infinite; }
-  @keyframes p { 0%,100% { opacity: 1 } 50% { opacity: 0.4 } }
+  body { font-family: 'Inter', system-ui, sans-serif; }
+  .dot { width: 6px; height: 6px; border-radius: 9999px; display: inline-block; }
+  .day-cell { min-height: 84px; }
+  .day-cell:hover { background: rgba(124,58,237,0.08); }
+  .day-cell.selected { outline: 2px solid #a78bfa; }
+  .day-cell.today .num { background: #7c3aed; color: white; border-radius: 9999px; padding: 2px 8px; }
+  .pill { font-size: 10px; padding: 2px 6px; border-radius: 4px; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .recording { animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
 </style>
-</head><body class="bg-zinc-950 text-zinc-100 min-h-screen antialiased">
-<div class="flex min-h-screen">
-  <!-- SIDEBAR -->
-  <aside class="hidden md:flex w-60 shrink-0 flex-col border-r border-zinc-900 bg-zinc-950/80 backdrop-blur sticky top-0 h-screen">
-    <div class="px-5 py-5 border-b border-zinc-900">
-      <div class="flex items-center gap-2">
-        <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-violet-500 to-fuchsia-600 grid place-items-center font-bold">H</div>
-        <div>
-          <div class="font-semibold leading-tight">Hermes</div>
-          <div class="text-[11px] text-zinc-500 leading-tight">personal assistant</div>
-        </div>
-      </div>
-    </div>
-    <nav class="flex-1 py-3 text-sm">
-      <a href="#today" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">📅 <span>Today</span></a>
-      <a href="#bills" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">💷 <span>Bills</span><span id="badge-bills" class="ml-auto text-[10px] bg-zinc-800 text-zinc-400 rounded-full px-1.5 hidden"></span></a>
-      <a href="#tasks" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">✅ <span>Tasks</span><span id="badge-tasks" class="ml-auto text-[10px] bg-zinc-800 text-zinc-400 rounded-full px-1.5 hidden"></span></a>
-      <a href="#reminders" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">⏰ <span>Reminders</span><span id="badge-reminders" class="ml-auto text-[10px] bg-zinc-800 text-zinc-400 rounded-full px-1.5 hidden"></span></a>
-      <a href="#shopping" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">🛒 <span>Shopping</span><span id="badge-shopping" class="ml-auto text-[10px] bg-zinc-800 text-zinc-400 rounded-full px-1.5 hidden"></span></a>
-      <a href="#notes" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">📝 <span>Notes</span></a>
-      <a href="#drafts" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">📨 <span>Email triage</span><span id="badge-drafts" class="ml-auto text-[10px] bg-zinc-800 text-zinc-400 rounded-full px-1.5 hidden"></span></a>
-      <div class="px-5 mt-4 mb-2 text-[10px] uppercase tracking-wider text-zinc-600">Intelligence</div>
-      <a href="#agents" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">🤖 <span>Agents</span></a>
-      <a href="#ask" class="nav-item flex items-center gap-3 px-5 py-2.5 hover:bg-zinc-900/60 text-zinc-400 hover:text-zinc-200">💬 <span>Ask Hermes</span></a>
+</head>
+<body class="bg-zinc-950 text-zinc-100 min-h-screen">
+<div class="flex">
+  <aside class="w-56 border-r border-zinc-800 min-h-screen p-5 sticky top-0 self-start">
+    <div class="text-xl font-bold mb-1">Hermes</div>
+    <div class="text-xs text-zinc-500 mb-8">your second brain</div>
+    <nav class="flex flex-col gap-1 text-sm">
+      <a href="#calendar" class="px-3 py-2 rounded hover:bg-zinc-800">📅 Calendar</a>
+      <a href="#today" class="px-3 py-2 rounded hover:bg-zinc-800">☀️ Today</a>
+      <a href="#bills" class="px-3 py-2 rounded hover:bg-zinc-800">💷 Bills</a>
+      <a href="#tasks" class="px-3 py-2 rounded hover:bg-zinc-800">✅ Tasks</a>
+      <a href="#reminders" class="px-3 py-2 rounded hover:bg-zinc-800">⏰ Reminders</a>
+      <a href="#shopping" class="px-3 py-2 rounded hover:bg-zinc-800">🛒 Shopping</a>
+      <a href="#drafts" class="px-3 py-2 rounded hover:bg-zinc-800">✉️ Drafts</a>
+      <a href="#notes" class="px-3 py-2 rounded hover:bg-zinc-800">📝 Notes</a>
+      <a href="#agents" class="px-3 py-2 rounded hover:bg-zinc-800">🤖 Agents</a>
     </nav>
-    <div class="px-5 py-4 border-t border-zinc-900 text-xs text-zinc-500 flex items-center justify-between">
-      <span class="flex items-center gap-1.5"><span class="pulse-dot w-1.5 h-1.5 rounded-full bg-emerald-500"></span><span id="status">online</span></span>
-      <a href="/logout" class="hover:text-zinc-300">sign out</a>
+    <div class="mt-10 text-xs text-zinc-500">
+      <a href="/oauth/google/start" class="hover:text-violet-400">Google OAuth →</a><br/>
+      <a href="/logout" class="hover:text-violet-400">Logout</a>
     </div>
   </aside>
 
-  <!-- MAIN -->
-  <main class="flex-1 min-w-0">
-    <div class="max-w-4xl mx-auto px-4 md:px-8 py-6 md:py-10 space-y-6">
-      <!-- HERO -->
-      <section class="hero-grad rounded-3xl border border-zinc-900 p-6 md:p-8">
-        <div class="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <div class="text-xs uppercase tracking-wider text-violet-300/70 mb-1" id="hero-date">—</div>
-            <h1 class="text-2xl md:text-3xl font-semibold" id="hero-greeting">Hermes</h1>
-            <p class="text-sm text-zinc-400 mt-1" id="hero-summary">loading your day…</p>
-          </div>
-          <div class="flex gap-2 text-xs">
-            <div class="bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2"><div class="text-zinc-500">today</div><div class="text-lg font-semibold" id="stat-events">0</div></div>
-            <div class="bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2"><div class="text-zinc-500">bills</div><div class="text-lg font-semibold" id="stat-bills">0</div></div>
-            <div class="bg-zinc-900/60 border border-zinc-800 rounded-xl px-3 py-2"><div class="text-zinc-500">tasks</div><div class="text-lg font-semibold" id="stat-tasks">0</div></div>
-          </div>
+  <main class="flex-1 p-8 max-w-6xl">
+    <header class="mb-8">
+      <h1 id="greeting" class="text-3xl font-bold mb-1">Hello.</h1>
+      <p class="text-zinc-400 text-sm" id="dateline"></p>
+    </header>
+
+    <section class="grid grid-cols-3 gap-4 mb-8">
+      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4"><div class="text-xs text-zinc-500">Today</div><div class="text-2xl font-semibold mt-1" id="stat-today">—</div></div>
+      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4"><div class="text-xs text-zinc-500">Bills due</div><div class="text-2xl font-semibold mt-1" id="stat-bills">—</div></div>
+      <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4"><div class="text-xs text-zinc-500">Open tasks</div><div class="text-2xl font-semibold mt-1" id="stat-tasks">—</div></div>
+    </section>
+
+    <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-8">
+      <form id="capture-form" class="flex gap-2">
+        <input id="capture-text" placeholder="capture anything — bills, events, notes, tasks..." class="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-3 outline-none focus:border-violet-500"/>
+        <button type="button" id="mic-btn" class="bg-zinc-800 hover:bg-zinc-700 px-4 rounded-lg" title="Hold to record (or press space)">🎙</button>
+        <button class="bg-violet-600 hover:bg-violet-500 px-5 rounded-lg font-medium">Capture</button>
+      </form>
+      <div id="capture-out" class="text-sm text-zinc-400 mt-3 hidden"></div>
+    </section>
+
+    <section id="calendar" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-8">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex items-center gap-3">
+          <button id="cal-prev" class="bg-zinc-800 hover:bg-zinc-700 w-8 h-8 rounded">‹</button>
+          <h2 id="cal-title" class="text-lg font-semibold"></h2>
+          <button id="cal-next" class="bg-zinc-800 hover:bg-zinc-700 w-8 h-8 rounded">›</button>
+          <button id="cal-today" class="text-xs text-zinc-400 hover:text-violet-400 ml-2">today</button>
         </div>
-        <!-- CAPTURE BAR -->
-        <form id="capture" class="mt-6 flex gap-2 items-stretch">
-          <div class="relative flex-1">
-            <input id="capture-text" autocomplete="off" autofocus
-              class="w-full bg-zinc-900/80 border border-zinc-800 rounded-xl px-4 py-3 pr-12 text-base outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500"
-              placeholder="Capture anything — or type a question and press Ask"/>
-            <span class="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-600 text-xs hidden md:inline">⏎ to send</span>
-          </div>
-          <button class="bg-violet-600 hover:bg-violet-500 px-4 rounded-xl font-medium text-sm">Send</button>
-          <button id="ask-btn" type="button" class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 px-4 rounded-xl text-sm">Ask</button>
-        </form>
-        <pre id="reply" class="mt-3 text-sm text-zinc-300 whitespace-pre-wrap"></pre>
-      </section>
-
-      <!-- TODAY -->
-      <section id="today" class="space-y-3 scroll-mt-8">
-        <h2 class="text-xs uppercase tracking-wider text-zinc-500">📅 Today & next 7 days</h2>
-        <ul id="events-list" class="space-y-2"></ul>
-      </section>
-
-      <!-- BILLS -->
-      <section id="bills" class="space-y-3 scroll-mt-8">
-        <h2 class="text-xs uppercase tracking-wider text-zinc-500">💷 Bills</h2>
-        <ul id="bills-list" class="space-y-2"></ul>
-      </section>
-
-      <!-- TASKS -->
-      <section id="tasks" class="space-y-3 scroll-mt-8">
-        <h2 class="text-xs uppercase tracking-wider text-zinc-500">✅ Tasks</h2>
-        <ul id="tasks-list" class="space-y-2"></ul>
-      </section>
-
-      <!-- REMINDERS -->
-      <section id="reminders" class="space-y-3 scroll-mt-8">
-        <h2 class="text-xs uppercase tracking-wider text-zinc-500">⏰ Reminders</h2>
-        <ul id="reminders-list" class="space-y-2"></ul>
-      </section>
-
-      <!-- SHOPPING -->
-      <section id="shopping" class="space-y-3 scroll-mt-8">
-        <h2 class="text-xs uppercase tracking-wider text-zinc-500">🛒 Shopping</h2>
-        <ul id="shopping-list" class="space-y-2"></ul>
-      </section>
-
-      <!-- NOTES -->
-      <section id="notes" class="space-y-3 scroll-mt-8">
-        <h2 class="text-xs uppercase tracking-wider text-zinc-500">📝 Recent notes</h2>
-        <ul id="notes-list" class="space-y-2"></ul>
-      </section>
-
-      <!-- DRAFTS -->
-      <section id="drafts" class="space-y-3 scroll-mt-8">
-        <h2 class="text-xs uppercase tracking-wider text-zinc-500">📨 Email triage</h2>
-        <ul id="drafts-list" class="space-y-2"></ul>
-      </section>
-
-      <!-- AGENTS -->
-      <section id="agents" class="space-y-3 scroll-mt-8">
-        <div class="flex items-center justify-between">
-          <h2 class="text-xs uppercase tracking-wider text-zinc-500">🤖 Specialist agents</h2>
-          <button id="gen-toggle" class="text-xs bg-violet-600 hover:bg-violet-500 px-3 py-1.5 rounded-lg font-medium">+ Generate new</button>
+        <div class="flex gap-3 text-xs text-zinc-400">
+          <span><span class="dot" style="background:#60a5fa"></span> event</span>
+          <span><span class="dot" style="background:#fb7185"></span> bill</span>
+          <span><span class="dot" style="background:#fbbf24"></span> reminder</span>
+          <span><span class="dot" style="background:#34d399"></span> task</span>
         </div>
-        <p class="text-xs text-zinc-500">Subagents Hermes can delegate to. The orchestrator routes to whichever charter cleanly fits.</p>
-        <ul id="agents-list" class="space-y-2"></ul>
-        <div id="gen-form" class="hidden space-y-2 pt-3 border-t border-zinc-900">
-          <textarea id="gen-desc" rows="3" class="w-full bg-zinc-900/80 border border-zinc-800 rounded-xl px-4 py-3 outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500" placeholder="Describe the new agent's purpose. E.g. 'A CESR Coach that tracks competency gaps and asks weekly progress prompts.'"></textarea>
-          <div class="flex gap-2">
-            <button id="gen-preview" class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 px-3 py-1.5 rounded-lg text-sm">Preview</button>
-            <button id="gen-save" class="bg-violet-600 hover:bg-violet-500 px-3 py-1.5 rounded-lg text-sm font-medium">Generate &amp; save</button>
-          </div>
-          <pre id="gen-out" class="text-xs text-zinc-400 whitespace-pre-wrap bg-zinc-900/40 rounded-lg p-3 max-h-72 overflow-auto"></pre>
-        </div>
-      </section>
+      </div>
+      <div class="grid grid-cols-7 gap-px text-[10px] uppercase text-zinc-500 mb-1 px-1">
+        <div>Mon</div><div>Tue</div><div>Wed</div><div>Thu</div><div>Fri</div><div>Sat</div><div>Sun</div>
+      </div>
+      <div id="cal-grid" class="grid grid-cols-7 gap-px bg-zinc-800 rounded overflow-hidden"></div>
+      <div id="day-detail" class="mt-5 hidden">
+        <h3 id="day-title" class="text-sm font-semibold text-zinc-300 mb-3"></h3>
+        <div id="day-items" class="space-y-2"></div>
+      </div>
+    </section>
 
-      <div id="ask" class="h-2"></div>
-      <div class="text-center text-xs text-zinc-700 pt-6">Hermes • Grok 4 Fast → Gemini 3 fallback</div>
+    <section id="today" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-6">
+      <h2 class="text-lg font-semibold mb-3">Today</h2>
+      <div id="today-list" class="space-y-2 text-sm"></div>
+    </section>
+
+    <div class="grid grid-cols-2 gap-6 mb-6">
+      <section id="bills" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+        <h2 class="text-lg font-semibold mb-3">💷 Bills</h2>
+        <div id="bills-list" class="space-y-2 text-sm"></div>
+      </section>
+      <section id="tasks" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+        <h2 class="text-lg font-semibold mb-3">✅ Tasks</h2>
+        <div id="tasks-list" class="space-y-2 text-sm"></div>
+      </section>
+      <section id="reminders" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+        <h2 class="text-lg font-semibold mb-3">⏰ Reminders</h2>
+        <div id="reminders-list" class="space-y-2 text-sm"></div>
+      </section>
+      <section id="shopping" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+        <h2 class="text-lg font-semibold mb-3">🛒 Shopping</h2>
+        <div id="shopping-list" class="space-y-2 text-sm"></div>
+      </section>
     </div>
+
+    <section id="drafts" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-6">
+      <h2 class="text-lg font-semibold mb-3">✉️ Email drafts</h2>
+      <div id="drafts-list" class="space-y-3 text-sm"></div>
+    </section>
+
+    <section id="notes" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-6">
+      <h2 class="text-lg font-semibold mb-3">📝 Notes</h2>
+      <div id="notes-list" class="space-y-2 text-sm"></div>
+    </section>
+
+    <section id="agents" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-12">
+      <h2 class="text-lg font-semibold mb-3">🤖 Subagents</h2>
+      <form id="agent-form" class="flex gap-2 mb-4">
+        <input id="agent-desc" placeholder="describe a new subagent..." class="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 outline-none focus:border-violet-500"/>
+        <button class="bg-violet-600 hover:bg-violet-500 px-4 rounded-lg font-medium">Generate</button>
+      </form>
+      <div id="agents-list" class="space-y-2 text-sm"></div>
+    </section>
   </main>
 </div>
 
 <script>
-const fmtDT = (s) => new Date(s).toLocaleString("en-GB", { weekday: "short", hour: "2-digit", minute: "2-digit" });
-const fmtD = (s) => new Date(s).toLocaleDateString("en-GB", { day: "2-digit", month: "short" });
-const J = (m, u, b) => fetch(u, { method: m, headers: { "Content-Type": "application/json" }, body: b ? JSON.stringify(b) : undefined }).then(r => r.json());
+const $ = (s) => document.querySelector(s);
+const COLORS = { event: '#60a5fa', bill: '#fb7185', reminder: '#fbbf24', task: '#34d399' };
+let STATE = { events: [], bills: [], reminders: [], tasks: [], shopping: [], notes: [] };
+let viewYear, viewMonth, selectedKey = null;
 
-const card = "bg-zinc-900/60 border border-zinc-800 rounded-xl px-4 py-3 hover:border-zinc-700 transition";
-const empty = (msg) => \`<li class="text-sm text-zinc-600 py-2">\${msg}</li>\`;
+function fmtDate(d) { return new Date(d).toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short' }); }
+function fmtTime(d) { return new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }); }
+function dateKey(d) { const x = new Date(d); return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0') + '-' + String(x.getDate()).padStart(2,'0'); }
+function escapeHtml(s) { return String(s||'').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
 
-function setBadge(id, n) {
-  const el = document.getElementById("badge-" + id);
-  if (!el) return;
-  if (n > 0) { el.textContent = n; el.classList.remove("hidden"); }
-  else el.classList.add("hidden");
+function bucketByDate() {
+  const map = {};
+  const push = (k, item) => { (map[dateKey(item.when)] = map[dateKey(item.when)] || []).push({ ...item, kind: k }); };
+  STATE.events.forEach(e => push('event', { id: e.id, when: e.startsAt, title: e.title, location: e.location }));
+  STATE.bills.forEach(b => push('bill', { id: b.id, when: b.dueDate, title: b.vendor + ' ' + (b.currency||'GBP') + b.amount }));
+  STATE.reminders.forEach(r => push('reminder', { id: r.id, when: r.remindAt, title: r.text }));
+  STATE.tasks.forEach(t => { if (t.dueAt) push('task', { id: t.id, when: t.dueAt, title: t.text }); });
+  return map;
 }
 
-function updateHero(s) {
-  const now = new Date();
-  const h = now.getHours();
-  const part = h < 5 ? "Up late" : h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : h < 22 ? "Good evening" : "Late night";
-  document.getElementById("hero-greeting").textContent = part + ", Sanyam";
-  document.getElementById("hero-date").textContent = now.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" });
-  const todayEvs = s.events.filter(e => new Date(e.startsAt) < new Date(now.getTime() + 24*60*60*1000));
-  document.getElementById("stat-events").textContent = todayEvs.length;
-  document.getElementById("stat-bills").textContent = s.bills.length;
-  document.getElementById("stat-tasks").textContent = s.tasks.length;
-  const bits = [];
-  if (todayEvs.length) bits.push(\`\${todayEvs.length} event\${todayEvs.length>1?"s":""} today\`);
-  if (s.bills.length) bits.push(\`\${s.bills.length} bill\${s.bills.length>1?"s":""} pending\`);
-  if (s.tasks.length) bits.push(\`\${s.tasks.length} open task\${s.tasks.length>1?"s":""}\`);
-  document.getElementById("hero-summary").textContent = bits.length ? bits.join(" · ") : "nothing pressing — quiet day";
-}
-
-async function load() {
-  const s = await J("GET", "/api/state");
-  document.getElementById("status").textContent = "online";
-  updateHero(s);
-  setBadge("bills", s.bills.length);
-  setBadge("tasks", s.tasks.length);
-  setBadge("reminders", s.reminders.length);
-  setBadge("shopping", s.shopping.length);
-
-  document.getElementById("events-list").innerHTML = s.events.length
-    ? s.events.map(e => \`<li class="\${card}"><div class="flex justify-between items-baseline gap-3"><div class="font-medium">\${e.title}</div><div class="text-xs text-zinc-500 shrink-0">\${fmtDT(e.startsAt)}</div></div>\${e.location ? \`<div class="text-xs text-zinc-500 mt-0.5">📍 \${e.location}</div>\` : ""}</li>\`).join("")
-    : empty("Nothing scheduled in the next 7 days.");
-
-  document.getElementById("reminders-list").innerHTML = s.reminders.length
-    ? s.reminders.map(r => \`<li class="\${card} flex justify-between items-center"><div><div>\${r.text}</div><div class="text-xs text-zinc-500 mt-0.5">\${fmtDT(r.remindAt)}</div></div></li>\`).join("")
-    : empty("No active reminders.");
-
-  document.getElementById("bills-list").innerHTML = s.bills.length
-    ? s.bills.map(b => \`<li class="\${card} flex justify-between items-center"><div><div class="font-medium">\${b.vendor}</div><div class="text-xs text-zinc-500">\${b.currency}\${b.amount} · due \${fmtD(b.dueDate)}</div></div><button onclick="markPaid('\${b.id}')" class="text-xs bg-emerald-600/20 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-600/30 px-3 py-1.5 rounded-lg">mark paid</button></li>\`).join("")
-    : empty("All caught up — no unpaid bills.");
-
-  document.getElementById("tasks-list").innerHTML = s.tasks.length
-    ? s.tasks.map(t => \`<li class="\${card} flex justify-between items-center"><div><div>\${t.title}\${t.dueDate ? \` <span class="text-xs text-zinc-500">· \${fmtD(t.dueDate)}</span>\` : ""}</div></div><button onclick="markDone('\${t.id}')" class="text-xs bg-emerald-600/20 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-600/30 px-3 py-1.5 rounded-lg">done</button></li>\`).join("")
-    : empty("No open tasks.");
-
-  document.getElementById("shopping-list").innerHTML = s.shopping.length
-    ? s.shopping.map(i => \`<li class="\${card} flex justify-between items-center"><div>\${i.name}\${i.qty ? \` <span class="text-xs text-zinc-500">× \${i.qty}</span>\` : ""}</div><button onclick="markBought('\${i.id}')" class="text-xs bg-emerald-600/20 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-600/30 px-3 py-1.5 rounded-lg">got</button></li>\`).join("")
-    : empty("Shopping list is empty.");
-
-  document.getElementById("notes-list").innerHTML = s.notes.length
-    ? s.notes.map(n => \`<li class="\${card}"><div class="text-[11px] text-zinc-500 mb-0.5">\${fmtD(n.createdAt)}</div><div class="whitespace-pre-wrap text-sm">\${n.content}</div></li>\`).join("")
-    : empty("No notes yet.");
-}
-
-// nav active highlighting
-function syncNav() {
-  const hash = location.hash || "#today";
-  document.querySelectorAll(".nav-item").forEach(a => a.classList.toggle("active", a.getAttribute("href") === hash));
-}
-window.addEventListener("hashchange", syncNav);
-syncNav();
-window.markBought = async (id) => { await J("POST", "/api/shopping/" + id + "/buy"); load(); };
-window.markDone = async (id) => { await J("POST", "/api/task/" + id + "/done"); load(); };
-window.markPaid = async (id) => { await J("POST", "/api/bill/" + id + "/paid"); load(); };
-
-document.getElementById("capture").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const t = document.getElementById("capture-text");
-  if (!t.value.trim()) return;
-  const r = await J("POST", "/api/capture", { text: t.value });
-  document.getElementById("reply").textContent = r.reply || JSON.stringify(r, null, 2);
-  t.value = "";
-  load();
-});
-document.getElementById("ask-btn").addEventListener("click", async () => {
-  const t = document.getElementById("capture-text");
-  if (!t.value.trim()) return;
-  document.getElementById("reply").textContent = "thinking…";
-  const r = await J("POST", "/api/query", { question: t.value });
-  document.getElementById("reply").textContent = r.answer || JSON.stringify(r);
-});
-
-async function loadAgents() {
-  const list = await J("GET", "/api/subagents");
-  document.getElementById("agents-list").innerHTML = list.length
-    ? list.map(a => \`<li class="flex justify-between items-start gap-2 py-1">
-        <div>
-          <div class="font-medium">\${a.displayName} <span class="text-zinc-500 text-xs">(\${a.name})</span></div>
-          <div class="text-zinc-400 text-xs">\${a.description}</div>
-          <div class="text-zinc-500 text-xs mt-1">tools: \${a.allowedTools.join(", ") || "(none)"}\${a.enabled ? "" : " · disabled"}</div>
-        </div>
-        <div class="flex gap-1 shrink-0">
-          <button onclick="toggleAgent('\${a.id}', \${!a.enabled})" class="text-xs bg-zinc-700 px-2 rounded">\${a.enabled ? "disable" : "enable"}</button>
-          <button onclick="deleteAgent('\${a.id}')" class="text-xs bg-rose-700 px-2 rounded">x</button>
-        </div>
-      </li>\`).join("")
-    : "<li class='text-zinc-500'>No agents yet — click 'Generate new'.</li>";
-}
-window.toggleAgent = async (id, enabled) => { await J("PATCH", "/api/subagents/" + id, { enabled }); loadAgents(); };
-window.deleteAgent = async (id) => { if (!confirm("Delete this agent?")) return; await J("DELETE", "/api/subagents/" + id); loadAgents(); };
-
-document.getElementById("gen-toggle").onclick = () => {
-  document.getElementById("gen-form").classList.toggle("hidden");
-};
-document.getElementById("gen-preview").onclick = async () => {
-  const desc = document.getElementById("gen-desc").value.trim();
-  if (!desc) return;
-  document.getElementById("gen-out").textContent = "thinking…";
-  const r = await J("POST", "/api/subagents/generate", { description: desc, save: false });
-  document.getElementById("gen-out").textContent = JSON.stringify(r.spec, null, 2);
-};
-document.getElementById("gen-save").onclick = async () => {
-  const desc = document.getElementById("gen-desc").value.trim();
-  if (!desc) return;
-  document.getElementById("gen-out").textContent = "generating…";
-  const r = await J("POST", "/api/subagents/generate", { description: desc, save: true });
-  document.getElementById("gen-out").textContent = r.error ? "Error: " + r.error : "Saved: " + r.spec.name;
-  if (!r.error) {
-    document.getElementById("gen-desc").value = "";
-    loadAgents();
+function renderCalendar() {
+  const buckets = bucketByDate();
+  const first = new Date(viewYear, viewMonth, 1);
+  $('#cal-title').textContent = first.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+  const startOffset = (first.getDay() + 6) % 7;
+  const daysInMonth = new Date(viewYear, viewMonth+1, 0).getDate();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const grid = $('#cal-grid');
+  grid.innerHTML = '';
+  for (let i = 0; i < 42; i++) {
+    const dayNum = i - startOffset + 1;
+    const cell = document.createElement('div');
+    cell.className = 'day-cell bg-zinc-900 p-1.5 cursor-pointer';
+    if (dayNum < 1 || dayNum > daysInMonth) { cell.style.opacity = '0.25'; grid.appendChild(cell); continue; }
+    const d = new Date(viewYear, viewMonth, dayNum);
+    const k = dateKey(d);
+    if (d.getTime() === today.getTime()) cell.classList.add('today');
+    if (k === selectedKey) cell.classList.add('selected');
+    const num = document.createElement('div');
+    num.className = 'num text-xs font-medium inline-block';
+    num.textContent = dayNum;
+    cell.appendChild(num);
+    const items = buckets[k] || [];
+    const wrap = document.createElement('div');
+    wrap.className = 'mt-1 space-y-0.5';
+    items.slice(0,3).forEach(it => {
+      const p = document.createElement('div');
+      p.className = 'pill';
+      p.style.background = COLORS[it.kind] + '22';
+      p.style.color = COLORS[it.kind];
+      p.textContent = it.title;
+      wrap.appendChild(p);
+    });
+    if (items.length > 3) {
+      const more = document.createElement('div');
+      more.className = 'text-[10px] text-zinc-500';
+      more.textContent = '+' + (items.length - 3) + ' more';
+      wrap.appendChild(more);
+    }
+    cell.appendChild(wrap);
+    cell.addEventListener('click', () => { selectedKey = k; renderCalendar(); renderDayDetail(); });
+    grid.appendChild(cell);
   }
-};
+}
+
+function renderDayDetail() {
+  const panel = $('#day-detail');
+  if (!selectedKey) { panel.classList.add('hidden'); return; }
+  panel.classList.remove('hidden');
+  const buckets = bucketByDate();
+  const items = buckets[selectedKey] || [];
+  const d = new Date(selectedKey + 'T00:00:00');
+  $('#day-title').textContent = d.toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long' }) + ' — ' + items.length + ' item' + (items.length===1?'':'s');
+  const wrap = $('#day-items');
+  wrap.innerHTML = '';
+  if (!items.length) { wrap.innerHTML = '<div class="text-xs text-zinc-500">Nothing scheduled.</div>'; return; }
+  items.sort((a,b) => new Date(a.when) - new Date(b.when)).forEach(it => {
+    const row = document.createElement('div');
+    row.className = 'flex items-center gap-3 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2';
+    row.innerHTML = '<span class="dot" style="background:' + COLORS[it.kind] + '"></span>' +
+      '<span class="text-xs text-zinc-500 w-12">' + fmtTime(it.when) + '</span>' +
+      '<span class="flex-1">' + escapeHtml(it.title) + '</span>' +
+      '<span class="text-[10px] uppercase text-zinc-500">' + it.kind + '</span>';
+    wrap.appendChild(row);
+  });
+}
+
+function renderLists() {
+  const today = new Date(); today.setHours(0,0,0,0);
+  const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate()+1);
+  const todayItems = [];
+  STATE.events.forEach(e => { const d = new Date(e.startsAt); if (d>=today && d<tomorrow) todayItems.push({ icon:'📅', t: fmtTime(e.startsAt) + ' ' + e.title }); });
+  STATE.reminders.forEach(r => { const d = new Date(r.remindAt); if (d>=today && d<tomorrow) todayItems.push({ icon:'⏰', t: fmtTime(r.remindAt) + ' ' + r.text }); });
+  $('#stat-today').textContent = todayItems.length;
+  $('#stat-bills').textContent = STATE.bills.length;
+  $('#stat-tasks').textContent = STATE.tasks.length;
+  $('#today-list').innerHTML = todayItems.length
+    ? todayItems.map(i => '<div class="flex gap-2"><span>' + i.icon + '</span><span>' + escapeHtml(i.t) + '</span></div>').join('')
+    : '<div class="text-zinc-500 text-xs">Nothing today. ✨</div>';
+
+  $('#bills-list').innerHTML = STATE.bills.length ? STATE.bills.map(b =>
+    '<div class="flex justify-between items-center bg-zinc-950 border border-zinc-800 rounded px-3 py-2">' +
+    '<div><div>' + escapeHtml(b.vendor) + ' <span class="text-zinc-500">' + (b.currency||'GBP') + b.amount + '</span></div>' +
+    '<div class="text-xs text-zinc-500">due ' + fmtDate(b.dueDate) + '</div></div>' +
+    '<button onclick="markBillPaid(\\''+b.id+'\\')" class="text-xs bg-zinc-800 hover:bg-violet-600 px-2 py-1 rounded">paid</button></div>'
+  ).join('') : '<div class="text-zinc-500 text-xs">No bills due. 💸</div>';
+
+  $('#tasks-list').innerHTML = STATE.tasks.length ? STATE.tasks.map(t =>
+    '<div class="flex justify-between items-center bg-zinc-950 border border-zinc-800 rounded px-3 py-2">' +
+    '<span>' + escapeHtml(t.text) + (t.dueAt ? ' <span class="text-xs text-zinc-500">— ' + fmtDate(t.dueAt) + '</span>' : '') + '</span>' +
+    '<button onclick="markTaskDone(\\''+t.id+'\\')" class="text-xs bg-zinc-800 hover:bg-violet-600 px-2 py-1 rounded">done</button></div>'
+  ).join('') : '<div class="text-zinc-500 text-xs">No tasks. 🌿</div>';
+
+  $('#reminders-list').innerHTML = STATE.reminders.length ? STATE.reminders.map(r =>
+    '<div class="bg-zinc-950 border border-zinc-800 rounded px-3 py-2"><div>' + escapeHtml(r.text) + '</div>' +
+    '<div class="text-xs text-zinc-500">' + fmtDate(r.remindAt) + ' ' + fmtTime(r.remindAt) + '</div></div>'
+  ).join('') : '<div class="text-zinc-500 text-xs">No reminders.</div>';
+
+  $('#shopping-list').innerHTML = STATE.shopping.length ? STATE.shopping.map(s =>
+    '<div class="flex justify-between items-center bg-zinc-950 border border-zinc-800 rounded px-3 py-2">' +
+    '<span>' + escapeHtml(s.item) + (s.qty ? ' × ' + s.qty : '') + '</span>' +
+    '<button onclick="markShopBought(\\''+s.id+'\\')" class="text-xs bg-zinc-800 hover:bg-violet-600 px-2 py-1 rounded">got it</button></div>'
+  ).join('') : '<div class="text-zinc-500 text-xs">List empty.</div>';
+
+  $('#notes-list').innerHTML = STATE.notes.length ? STATE.notes.map(n =>
+    '<div class="bg-zinc-950 border border-zinc-800 rounded px-3 py-2"><div>' + escapeHtml(n.body || n.title || '') + '</div>' +
+    '<div class="text-xs text-zinc-500 mt-1">' + new Date(n.createdAt).toLocaleString('en-GB') + '</div></div>'
+  ).join('') : '<div class="text-zinc-500 text-xs">No notes yet.</div>';
+}
+
+async function loadState() {
+  const r = await fetch('/api/state');
+  STATE = await r.json();
+  renderCalendar(); renderLists();
+  if (selectedKey) renderDayDetail();
+}
 
 async function loadDrafts() {
-  const list = await J("GET", "/api/drafts");
-  setBadge("drafts", list.length);
-  document.getElementById("drafts-list").innerHTML = list.length
-    ? list.map(d => {
-        const tone = d.triage === "URGENT_PING" ? "bg-rose-600/20 border-rose-700/40 text-rose-300"
-          : d.triage === "REPLY_NEEDED" ? "bg-amber-600/20 border-amber-700/40 text-amber-300"
-          : "bg-zinc-700/40 border-zinc-600/40 text-zinc-300";
-        return \`<li class="\${card}">
-          <div class="flex justify-between items-start gap-2">
-            <div class="flex-1 min-w-0">
-              <div class="flex items-center gap-2 mb-1"><span class="text-[10px] px-2 py-0.5 rounded-full border \${tone}">\${d.triage}</span><span class="text-xs text-zinc-500">\${fmtD(d.createdAt)}</span></div>
-              <div class="font-medium truncate">\${d.subject}</div>
-              <div class="text-xs text-zinc-500 truncate">from \${d.fromAddress}</div>
-              \${d.reasoning ? \`<div class="text-xs text-zinc-500 mt-1 italic">\${d.reasoning}</div>\` : ""}
-              \${d.draftReply ? \`<details class="mt-2"><summary class="text-xs text-violet-300 cursor-pointer">view drafted reply</summary><pre class="mt-2 text-xs text-zinc-300 whitespace-pre-wrap bg-zinc-950/60 rounded p-2">\${d.draftReply}</pre></details>\` : ""}
-            </div>
-            <div class="flex flex-col gap-1 shrink-0">
-              \${d.draftReply ? \`<button onclick="approveDraft('\${d.id}')" class="text-xs bg-emerald-600/20 border border-emerald-700/40 text-emerald-300 hover:bg-emerald-600/30 px-3 py-1.5 rounded-lg">approve</button>\` : ""}
-              <button onclick="discardDraft('\${d.id}')" class="text-xs bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-zinc-200 px-3 py-1.5 rounded-lg">dismiss</button>
-            </div>
-          </div>
-        </li>\`;
-      }).join("")
-    : empty("No emails awaiting triage. (Forward to your assistant Gmail once OAuth is wired.)");
+  const r = await fetch('/api/drafts');
+  const list = await r.json();
+  $('#drafts-list').innerHTML = list.length ? list.map(d =>
+    '<div class="bg-zinc-950 border border-zinc-800 rounded p-3">' +
+    '<div class="text-xs text-zinc-500">to ' + escapeHtml(d.to||'') + '</div>' +
+    '<div class="font-medium">' + escapeHtml(d.subject||'') + '</div>' +
+    '<pre class="whitespace-pre-wrap text-xs mt-2 text-zinc-300">' + escapeHtml(d.body||'') + '</pre>' +
+    '<div class="flex gap-2 mt-2">' +
+    '<button onclick="approveDraft(\\''+d.id+'\\')" class="text-xs bg-violet-600 hover:bg-violet-500 px-3 py-1 rounded">approve</button>' +
+    '<button onclick="discardDraft(\\''+d.id+'\\')" class="text-xs bg-zinc-800 hover:bg-zinc-700 px-3 py-1 rounded">discard</button>' +
+    '</div></div>'
+  ).join('') : '<div class="text-zinc-500 text-xs">No pending drafts.</div>';
 }
-window.discardDraft = async (id) => { await J("POST", "/api/draft/" + id + "/discard"); loadDrafts(); };
-window.approveDraft = async (id) => { const r = await J("POST", "/api/draft/" + id + "/approve"); if (r.note) alert(r.note); loadDrafts(); };
 
-load();
-loadAgents();
-loadDrafts();
-setInterval(() => { load(); loadDrafts(); }, 30000);
+async function loadAgents() {
+  const r = await fetch('/api/subagents');
+  const list = await r.json();
+  $('#agents-list').innerHTML = list.length ? list.map(a =>
+    '<div class="flex justify-between items-center bg-zinc-950 border border-zinc-800 rounded px-3 py-2">' +
+    '<div><div class="font-medium">' + escapeHtml(a.name) + '</div>' +
+    '<div class="text-xs text-zinc-500">' + escapeHtml(a.description||'') + '</div></div>' +
+    '<span class="text-xs ' + (a.enabled?'text-emerald-400':'text-zinc-500') + '">' + (a.enabled?'enabled':'disabled') + '</span></div>'
+  ).join('') : '<div class="text-zinc-500 text-xs">No subagents yet.</div>';
+}
+
+window.markBillPaid = async (id) => { await fetch('/api/bill/'+id+'/paid', { method:'POST' }); loadState(); };
+window.markTaskDone = async (id) => { await fetch('/api/task/'+id+'/done', { method:'POST' }); loadState(); };
+window.markShopBought = async (id) => { await fetch('/api/shopping/'+id+'/buy', { method:'POST' }); loadState(); };
+window.approveDraft = async (id) => { await fetch('/api/draft/'+id+'/approve', { method:'POST' }); loadDrafts(); };
+window.discardDraft = async (id) => { await fetch('/api/draft/'+id+'/discard', { method:'POST' }); loadDrafts(); };
+
+$('#capture-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = $('#capture-text').value.trim();
+  if (!text) return;
+  const out = $('#capture-out'); out.classList.remove('hidden'); out.textContent = '⏳ thinking...';
+  const r = await fetch('/api/capture', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ text }) });
+  const j = await r.json();
+  out.textContent = j.reply || j.error || 'done.';
+  $('#capture-text').value = '';
+  loadState();
+});
+
+$('#agent-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const desc = $('#agent-desc').value.trim();
+  if (!desc) return;
+  await fetch('/api/subagents/generate', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ description: desc }) });
+  $('#agent-desc').value = '';
+  loadAgents();
+});
+
+$('#cal-prev').onclick = () => { viewMonth--; if (viewMonth<0) { viewMonth=11; viewYear--; } renderCalendar(); };
+$('#cal-next').onclick = () => { viewMonth++; if (viewMonth>11) { viewMonth=0; viewYear++; } renderCalendar(); };
+$('#cal-today').onclick = () => { const n = new Date(); viewYear=n.getFullYear(); viewMonth=n.getMonth(); selectedKey=dateKey(n); renderCalendar(); renderDayDetail(); };
+
+let mediaRec, chunks = [];
+async function startRec() {
+  if (mediaRec && mediaRec.state === 'recording') return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRec = new MediaRecorder(stream);
+    chunks = [];
+    mediaRec.ondataavailable = (e) => chunks.push(e.data);
+    mediaRec.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      const blob = new Blob(chunks, { type: 'audio/webm' });
+      const fd = new FormData();
+      fd.append('file', blob, 'recording.webm');
+      const out = $('#capture-out'); out.classList.remove('hidden'); out.textContent = '⏳ transcribing...';
+      const r = await fetch('/api/capture/audio', { method:'POST', body: fd });
+      const j = await r.json();
+      out.textContent = (j.transcript ? '🎙 "' + j.transcript + '" → ' : '') + (j.reply || j.error || 'done.');
+      loadState();
+    };
+    mediaRec.start();
+    $('#mic-btn').classList.add('recording','bg-rose-600');
+  } catch (e) { alert('Mic access denied.'); }
+}
+function stopRec() {
+  if (mediaRec && mediaRec.state === 'recording') mediaRec.stop();
+  $('#mic-btn').classList.remove('recording','bg-rose-600');
+}
+$('#mic-btn').addEventListener('mousedown', startRec);
+$('#mic-btn').addEventListener('mouseup', stopRec);
+$('#mic-btn').addEventListener('touchstart', (e) => { e.preventDefault(); startRec(); });
+$('#mic-btn').addEventListener('touchend', (e) => { e.preventDefault(); stopRec(); });
+window.addEventListener('keydown', (e) => { if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') { e.preventDefault(); startRec(); } });
+window.addEventListener('keyup', (e) => { if (e.code === 'Space') stopRec(); });
+
+(function init() {
+  const n = new Date();
+  viewYear = n.getFullYear(); viewMonth = n.getMonth();
+  selectedKey = dateKey(n);
+  const h = n.getHours();
+  const greet = h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+  $('#greeting').textContent = greet + ', Sanyam.';
+  $('#dateline').textContent = n.toLocaleDateString('en-GB', { weekday:'long', day:'2-digit', month:'long', year:'numeric' });
+  loadState(); loadDrafts(); loadAgents();
+  setInterval(loadState, 30000);
+})();
 </script>
 </body></html>`;
