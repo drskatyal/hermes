@@ -240,17 +240,19 @@ const HTML = `<!doctype html>
   <aside class="w-56 border-r border-zinc-800 min-h-screen p-5 sticky top-0 self-start">
     <div class="text-xl font-bold mb-1">Hermes</div>
     <div class="text-xs text-zinc-500 mb-8">your second brain</div>
-    <nav class="flex flex-col gap-1 text-sm">
-      <a href="#calendar" class="px-3 py-2 rounded hover:bg-zinc-800">📅 Calendar</a>
-      <a href="#today" class="px-3 py-2 rounded hover:bg-zinc-800">☀️ Today</a>
-      <a href="#bills" class="px-3 py-2 rounded hover:bg-zinc-800">💷 Bills</a>
-      <a href="#tasks" class="px-3 py-2 rounded hover:bg-zinc-800">✅ Tasks</a>
-      <a href="#reminders" class="px-3 py-2 rounded hover:bg-zinc-800">⏰ Reminders</a>
-      <a href="#shopping" class="px-3 py-2 rounded hover:bg-zinc-800">🛒 Shopping</a>
-      <a href="#drafts" class="px-3 py-2 rounded hover:bg-zinc-800">✉️ Drafts</a>
-      <a href="#notes" class="px-3 py-2 rounded hover:bg-zinc-800">📝 Notes</a>
-      <a href="#agents" class="px-3 py-2 rounded hover:bg-zinc-800">🤖 Agents</a>
+    <nav id="nav" class="flex flex-col gap-1 text-sm">
+      <a data-view="dashboard" class="nav-link px-3 py-2 rounded hover:bg-zinc-800 cursor-pointer">🏠 Dashboard</a>
+      <a data-view="chat" class="nav-link px-3 py-2 rounded hover:bg-zinc-800 cursor-pointer">💬 Ask Hermes</a>
+      <a data-view="calendar" class="nav-link px-3 py-2 rounded hover:bg-zinc-800 cursor-pointer">📅 Calendar</a>
+      <a data-view="bills" class="nav-link px-3 py-2 rounded hover:bg-zinc-800 cursor-pointer">💷 Bills</a>
+      <a data-view="tasks" class="nav-link px-3 py-2 rounded hover:bg-zinc-800 cursor-pointer">✅ Tasks</a>
+      <a data-view="reminders" class="nav-link px-3 py-2 rounded hover:bg-zinc-800 cursor-pointer">⏰ Reminders</a>
+      <a data-view="shopping" class="nav-link px-3 py-2 rounded hover:bg-zinc-800 cursor-pointer">🛒 Shopping</a>
+      <a data-view="drafts" class="nav-link px-3 py-2 rounded hover:bg-zinc-800 cursor-pointer">✉️ Drafts</a>
+      <a data-view="notes" class="nav-link px-3 py-2 rounded hover:bg-zinc-800 cursor-pointer">📝 Notes</a>
+      <a data-view="agents" class="nav-link px-3 py-2 rounded hover:bg-zinc-800 cursor-pointer">🤖 Agents</a>
     </nav>
+    <style>.nav-link.active { background:#7c3aed; color:white; }</style>
     <div class="mt-10 text-xs text-zinc-500">
       <a href="/oauth/google/start" class="hover:text-violet-400">Google OAuth →</a><br/>
       <a href="/logout" class="hover:text-violet-400">Logout</a>
@@ -263,6 +265,7 @@ const HTML = `<!doctype html>
       <p class="text-zinc-400 text-sm" id="dateline"></p>
     </header>
 
+    <div data-view="dashboard">
     <section class="grid grid-cols-3 gap-4 mb-8">
       <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4"><div class="text-xs text-zinc-500">Today</div><div class="text-2xl font-semibold mt-1" id="stat-today">—</div></div>
       <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-4"><div class="text-xs text-zinc-500">Bills due</div><div class="text-2xl font-semibold mt-1" id="stat-bills">—</div></div>
@@ -278,7 +281,25 @@ const HTML = `<!doctype html>
       <div id="capture-out" class="text-sm text-zinc-400 mt-3 hidden"></div>
     </section>
 
-    <section id="calendar" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-8">
+    <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-6">
+      <h2 class="text-lg font-semibold mb-3">Today</h2>
+      <div id="today-list" class="space-y-2 text-sm"></div>
+    </section>
+    </div>
+
+    <div data-view="chat" class="hidden">
+    <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 flex flex-col" style="height:calc(100vh - 180px); min-height:520px">
+      <h2 class="text-lg font-semibold mb-3">💬 Ask Hermes</h2>
+      <div id="chat-log" class="flex-1 overflow-y-auto space-y-3 text-sm pr-2 mb-3"></div>
+      <form id="chat-form" class="flex gap-2">
+        <input id="chat-input" placeholder="ask anything — &quot;what's due this week?&quot;, &quot;summarise my day&quot;..." autocomplete="off" class="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-4 py-3 outline-none focus:border-violet-500"/>
+        <button class="bg-violet-600 hover:bg-violet-500 px-5 rounded-lg font-medium">Ask</button>
+      </form>
+    </section>
+    </div>
+
+    <div data-view="calendar" class="hidden">
+    <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-8">
       <div class="flex items-center justify-between mb-4">
         <div class="flex items-center gap-3">
           <button id="cal-prev" class="bg-zinc-800 hover:bg-zinc-700 w-8 h-8 rounded">‹</button>
@@ -302,42 +323,49 @@ const HTML = `<!doctype html>
         <div id="day-items" class="space-y-2"></div>
       </div>
     </section>
+    </div>
 
-    <section id="today" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-6">
-      <h2 class="text-lg font-semibold mb-3">Today</h2>
-      <div id="today-list" class="space-y-2 text-sm"></div>
-    </section>
-
-    <div class="grid grid-cols-2 gap-6 mb-6">
-      <section id="bills" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+    <div data-view="bills" class="hidden">
+      <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
         <h2 class="text-lg font-semibold mb-3">💷 Bills</h2>
         <div id="bills-list" class="space-y-2 text-sm"></div>
       </section>
-      <section id="tasks" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+    </div>
+    <div data-view="tasks" class="hidden">
+      <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
         <h2 class="text-lg font-semibold mb-3">✅ Tasks</h2>
         <div id="tasks-list" class="space-y-2 text-sm"></div>
       </section>
-      <section id="reminders" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+    </div>
+    <div data-view="reminders" class="hidden">
+      <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
         <h2 class="text-lg font-semibold mb-3">⏰ Reminders</h2>
         <div id="reminders-list" class="space-y-2 text-sm"></div>
       </section>
-      <section id="shopping" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+    </div>
+    <div data-view="shopping" class="hidden">
+      <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
         <h2 class="text-lg font-semibold mb-3">🛒 Shopping</h2>
         <div id="shopping-list" class="space-y-2 text-sm"></div>
       </section>
     </div>
 
-    <section id="drafts" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-6">
+    <div data-view="drafts" class="hidden">
+    <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
       <h2 class="text-lg font-semibold mb-3">✉️ Email drafts</h2>
       <div id="drafts-list" class="space-y-3 text-sm"></div>
     </section>
+    </div>
 
-    <section id="notes" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-6">
+    <div data-view="notes" class="hidden">
+    <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
       <h2 class="text-lg font-semibold mb-3">📝 Notes</h2>
       <div id="notes-list" class="space-y-2 text-sm"></div>
     </section>
+    </div>
 
-    <section id="agents" class="bg-zinc-900 border border-zinc-800 rounded-xl p-5 mb-12">
+    <div data-view="agents" class="hidden">
+    <section class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
       <h2 class="text-lg font-semibold mb-3">🤖 Subagents</h2>
       <form id="agent-form" class="flex gap-2 mb-4">
         <input id="agent-desc" placeholder="describe a new subagent..." class="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 outline-none focus:border-violet-500"/>
@@ -345,6 +373,7 @@ const HTML = `<!doctype html>
       </form>
       <div id="agents-list" class="space-y-2 text-sm"></div>
     </section>
+    </div>
   </main>
 </div>
 
@@ -581,6 +610,48 @@ $('#mic-btn').addEventListener('touchend', (e) => { e.preventDefault(); stopRec(
 window.addEventListener('keydown', (e) => { if (e.code === 'Space' && document.activeElement.tagName !== 'INPUT' && document.activeElement.tagName !== 'TEXTAREA') { e.preventDefault(); startRec(); } });
 window.addEventListener('keyup', (e) => { if (e.code === 'Space') stopRec(); });
 
+function showView(name) {
+  document.querySelectorAll('[data-view]').forEach(el => {
+    if (el.tagName === 'A') {
+      el.classList.toggle('active', el.dataset.view === name);
+    } else {
+      el.classList.toggle('hidden', el.dataset.view !== name);
+    }
+  });
+  if (name === 'chat') setTimeout(() => $('#chat-input') && $('#chat-input').focus(), 50);
+  if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
+}
+document.querySelectorAll('a.nav-link').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); showView(a.dataset.view); }));
+
+const chatLog = () => $('#chat-log');
+function chatBubble(role, text) {
+  const div = document.createElement('div');
+  div.className = role === 'user'
+    ? 'bg-violet-600/20 border border-violet-700 text-zinc-100 self-end ml-auto rounded-lg px-3 py-2 max-w-[80%]'
+    : 'bg-zinc-950 border border-zinc-800 text-zinc-200 rounded-lg px-3 py-2 max-w-[80%]';
+  div.style.whiteSpace = 'pre-wrap';
+  div.textContent = text;
+  return div;
+}
+$('#chat-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const q = $('#chat-input').value.trim();
+  if (!q) return;
+  chatLog().appendChild(chatBubble('user', q));
+  $('#chat-input').value = '';
+  const thinking = chatBubble('bot', '⏳ thinking...');
+  chatLog().appendChild(thinking);
+  chatLog().scrollTop = chatLog().scrollHeight;
+  try {
+    const r = await fetch('/api/query', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ question: q }) });
+    const j = await r.json();
+    thinking.textContent = j.answer || j.error || '(no answer)';
+  } catch (err) {
+    thinking.textContent = 'Error: ' + (err && err.message || err);
+  }
+  chatLog().scrollTop = chatLog().scrollHeight;
+});
+
 (function init() {
   const n = new Date();
   const ukParts = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', hour12:false }).formatToParts(n);
@@ -593,6 +664,8 @@ window.addEventListener('keyup', (e) => { if (e.code === 'Space') stopRec(); });
   $('#dateline').textContent = n.toLocaleDateString('en-GB', { timeZone: TZ, weekday:'long', day:'2-digit', month:'long', year:'numeric' }) + ' · UK time';
   loadState(); loadDrafts(); loadAgents();
   setInterval(loadState, 30000);
+  const initial = (location.hash || '#dashboard').slice(1);
+  showView(['dashboard','chat','calendar','bills','tasks','reminders','shopping','drafts','notes','agents'].includes(initial) ? initial : 'dashboard');
 })();
 </script>
 </body></html>`;
