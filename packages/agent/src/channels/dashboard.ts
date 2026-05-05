@@ -6,6 +6,7 @@ import { ingest } from "../pipeline/ingest.js";
 import { runQuery } from "../pipeline/query.js";
 import { previewAndSave, generateSubagent, saveSubagent, SubagentSpec } from "../lib/agent-generator.js";
 import { transcribeWithVoxtral } from "../lib/voxtral.js";
+import { hermesIconPng } from "../lib/icon.js";
 
 export const dashboard = new Hono();
 
@@ -29,6 +30,34 @@ const LOGIN_HTML = `<!doctype html><html><head><meta name="viewport" content="wi
     <button style="background:#7c3aed;border:none;color:white;padding:10px 16px;border-radius:6px;cursor:pointer">Sign in</button>
   </form>
 </body></html>`;
+
+dashboard.get("/manifest.json", (c) => c.json({
+  name: "Hermes",
+  short_name: "Hermes",
+  description: "Your second brain",
+  start_url: "/",
+  display: "standalone",
+  background_color: "#0a0a0a",
+  theme_color: "#0a0a0a",
+  orientation: "portrait",
+  icons: [
+    { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+    { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" },
+  ],
+}));
+
+dashboard.get("/icon-192.png", (c) => {
+  const buf = hermesIconPng(192);
+  return c.body(buf as unknown as ArrayBuffer, 200, { "content-type": "image/png", "cache-control": "public, max-age=86400" });
+});
+dashboard.get("/icon-512.png", (c) => {
+  const buf = hermesIconPng(512);
+  return c.body(buf as unknown as ArrayBuffer, 200, { "content-type": "image/png", "cache-control": "public, max-age=86400" });
+});
+dashboard.get("/icon-180.png", (c) => {
+  const buf = hermesIconPng(180);
+  return c.body(buf as unknown as ArrayBuffer, 200, { "content-type": "image/png", "cache-control": "public, max-age=86400" });
+});
 
 dashboard.get("/login", (c) => c.html(LOGIN_HTML));
 
@@ -217,22 +246,56 @@ const HTML = `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no"/>
 <title>Hermes</title>
+<meta name="theme-color" content="#0a0a0a"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Hermes"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<link rel="manifest" href="/manifest.json"/>
+<link rel="apple-touch-icon" href="/icon-180.png"/>
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png"/>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdn.tailwindcss.com"></script>
 <style>
-  body { font-family: 'Inter', system-ui, sans-serif; }
+  :root { --safe-top: env(safe-area-inset-top, 0px); --safe-bot: env(safe-area-inset-bottom, 0px); }
+  html, body { overscroll-behavior-y: none; -webkit-tap-highlight-color: transparent; }
+  body { font-family: 'Inter', system-ui, sans-serif; padding-top: var(--safe-top); }
   .dot { width: 6px; height: 6px; border-radius: 9999px; display: inline-block; }
-  .day-cell { min-height: 84px; }
+  .day-cell { min-height: 70px; }
   .day-cell:hover { background: rgba(124,58,237,0.08); }
   .day-cell.selected { outline: 2px solid #a78bfa; }
   .day-cell.today .num { background: #7c3aed; color: white; border-radius: 9999px; padding: 2px 8px; }
   .pill { font-size: 10px; padding: 2px 6px; border-radius: 4px; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .recording { animation: pulse 1.2s infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  /* iOS bottom tab bar */
+  #tabbar { display: none; }
+  @media (max-width: 768px) {
+    aside { display: none !important; }
+    main { padding: 16px !important; padding-bottom: calc(80px + var(--safe-bot)) !important; max-width: 100% !important; }
+    h1#greeting { font-size: 1.5rem !important; }
+    .grid-cols-3 { grid-template-columns: repeat(3, minmax(0,1fr)); gap: 8px !important; }
+    .grid-cols-2 { grid-template-columns: 1fr !important; }
+    #tabbar {
+      display: flex; position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
+      background: rgba(10,10,10,0.92); backdrop-filter: blur(12px);
+      border-top: 1px solid #27272a;
+      padding: 8px 4px calc(8px + var(--safe-bot)) 4px;
+      justify-content: space-around;
+    }
+    #tabbar a { flex: 1; text-align: center; padding: 6px 2px; border-radius: 8px; font-size: 10px; color: #a1a1aa; }
+    #tabbar a.active { color: #a78bfa; background: rgba(124,58,237,0.15); }
+    #tabbar a .ico { display: block; font-size: 18px; line-height: 1; margin-bottom: 2px; }
+  }
+  /* Larger touch targets on mobile */
+  @media (max-width: 768px) {
+    button, input { font-size: 16px !important; }
+    input, textarea { font-size: 16px !important; } /* prevent iOS zoom */
+  }
 </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100 min-h-screen">
@@ -376,6 +439,15 @@ const HTML = `<!doctype html>
     </div>
   </main>
 </div>
+
+<nav id="tabbar">
+  <a data-view="dashboard" class="tab-link"><span class="ico">🏠</span>Home</a>
+  <a data-view="chat" class="tab-link"><span class="ico">💬</span>Ask</a>
+  <a data-view="calendar" class="tab-link"><span class="ico">📅</span>Cal</a>
+  <a data-view="bills" class="tab-link"><span class="ico">💷</span>Bills</a>
+  <a data-view="tasks" class="tab-link"><span class="ico">✅</span>Tasks</a>
+  <a data-view="notes" class="tab-link"><span class="ico">📝</span>Notes</a>
+</nav>
 
 <script>
 const $ = (s) => document.querySelector(s);
@@ -618,10 +690,10 @@ function showView(name) {
       el.classList.toggle('hidden', el.dataset.view !== name);
     }
   });
-  if (name === 'chat') setTimeout(() => $('#chat-input') && $('#chat-input').focus(), 50);
+  window.scrollTo({ top: 0, behavior: 'instant' });
   if (location.hash !== '#' + name) history.replaceState(null, '', '#' + name);
 }
-document.querySelectorAll('a.nav-link').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); showView(a.dataset.view); }));
+document.querySelectorAll('a.nav-link, a.tab-link').forEach(a => a.addEventListener('click', (e) => { e.preventDefault(); showView(a.dataset.view); }));
 
 const chatLog = () => $('#chat-log');
 function chatBubble(role, text) {
