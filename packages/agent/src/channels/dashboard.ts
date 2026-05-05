@@ -354,9 +354,15 @@ const COLORS = { event: '#60a5fa', bill: '#fb7185', reminder: '#fbbf24', task: '
 let STATE = { events: [], bills: [], reminders: [], tasks: [], shopping: [], notes: [] };
 let viewYear, viewMonth, selectedKey = null;
 
-function fmtDate(d) { return new Date(d).toLocaleDateString('en-GB', { weekday: 'short', day: '2-digit', month: 'short' }); }
-function fmtTime(d) { return new Date(d).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }); }
-function dateKey(d) { const x = new Date(d); return x.getFullYear() + '-' + String(x.getMonth()+1).padStart(2,'0') + '-' + String(x.getDate()).padStart(2,'0'); }
+const TZ = 'Europe/London';
+function fmtDate(d) { return new Date(d).toLocaleDateString('en-GB', { timeZone: TZ, weekday: 'short', day: '2-digit', month: 'short' }); }
+function fmtTime(d) { return new Date(d).toLocaleTimeString('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit' }); }
+function dateKey(d) {
+  const parts = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(d));
+  const get = (t) => parts.find(p => p.type === t).value;
+  return get('year') + '-' + get('month') + '-' + get('day');
+}
+function todayKey() { return dateKey(new Date()); }
 function escapeHtml(s) { return String(s||'').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
 
 function bucketByDate() {
@@ -375,7 +381,7 @@ function renderCalendar() {
   $('#cal-title').textContent = first.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
   const startOffset = (first.getDay() + 6) % 7;
   const daysInMonth = new Date(viewYear, viewMonth+1, 0).getDate();
-  const today = new Date(); today.setHours(0,0,0,0);
+  const tKey = todayKey();
   const grid = $('#cal-grid');
   grid.innerHTML = '';
   for (let i = 0; i < 42; i++) {
@@ -383,9 +389,8 @@ function renderCalendar() {
     const cell = document.createElement('div');
     cell.className = 'day-cell bg-zinc-900 p-1.5 cursor-pointer';
     if (dayNum < 1 || dayNum > daysInMonth) { cell.style.opacity = '0.25'; grid.appendChild(cell); continue; }
-    const d = new Date(viewYear, viewMonth, dayNum);
-    const k = dateKey(d);
-    if (d.getTime() === today.getTime()) cell.classList.add('today');
+    const k = viewYear + '-' + String(viewMonth+1).padStart(2,'0') + '-' + String(dayNum).padStart(2,'0');
+    if (k === tKey) cell.classList.add('today');
     if (k === selectedKey) cell.classList.add('selected');
     const num = document.createElement('div');
     num.className = 'num text-xs font-medium inline-block';
@@ -420,8 +425,8 @@ function renderDayDetail() {
   panel.classList.remove('hidden');
   const buckets = bucketByDate();
   const items = buckets[selectedKey] || [];
-  const d = new Date(selectedKey + 'T00:00:00');
-  $('#day-title').textContent = d.toLocaleDateString('en-GB', { weekday: 'long', day: '2-digit', month: 'long' }) + ' — ' + items.length + ' item' + (items.length===1?'':'s');
+  const d = new Date(selectedKey + 'T12:00:00Z');
+  $('#day-title').textContent = d.toLocaleDateString('en-GB', { timeZone: TZ, weekday: 'long', day: '2-digit', month: 'long' }) + ' — ' + items.length + ' item' + (items.length===1?'':'s');
   const wrap = $('#day-items');
   wrap.innerHTML = '';
   if (!items.length) { wrap.innerHTML = '<div class="text-xs text-zinc-500">Nothing scheduled.</div>'; return; }
@@ -437,11 +442,10 @@ function renderDayDetail() {
 }
 
 function renderLists() {
-  const today = new Date(); today.setHours(0,0,0,0);
-  const tomorrow = new Date(today); tomorrow.setDate(tomorrow.getDate()+1);
+  const tKey = todayKey();
   const todayItems = [];
-  STATE.events.forEach(e => { const d = new Date(e.startsAt); if (d>=today && d<tomorrow) todayItems.push({ icon:'📅', t: fmtTime(e.startsAt) + ' ' + e.title }); });
-  STATE.reminders.forEach(r => { const d = new Date(r.remindAt); if (d>=today && d<tomorrow) todayItems.push({ icon:'⏰', t: fmtTime(r.remindAt) + ' ' + r.text }); });
+  STATE.events.forEach(e => { if (dateKey(e.startsAt) === tKey) todayItems.push({ icon:'📅', t: fmtTime(e.startsAt) + ' ' + e.title }); });
+  STATE.reminders.forEach(r => { if (dateKey(r.remindAt) === tKey) todayItems.push({ icon:'⏰', t: fmtTime(r.remindAt) + ' ' + r.text }); });
   $('#stat-today').textContent = todayItems.length;
   $('#stat-bills').textContent = STATE.bills.length;
   $('#stat-tasks').textContent = STATE.tasks.length;
@@ -475,7 +479,7 @@ function renderLists() {
 
   $('#notes-list').innerHTML = STATE.notes.length ? STATE.notes.map(n =>
     '<div class="bg-zinc-950 border border-zinc-800 rounded px-3 py-2"><div>' + escapeHtml(n.body || n.title || '') + '</div>' +
-    '<div class="text-xs text-zinc-500 mt-1">' + new Date(n.createdAt).toLocaleString('en-GB') + '</div></div>'
+    '<div class="text-xs text-zinc-500 mt-1">' + new Date(n.createdAt).toLocaleString('en-GB', { timeZone: TZ }) + '</div></div>'
   ).join('') : '<div class="text-zinc-500 text-xs">No notes yet.</div>';
 }
 
@@ -579,12 +583,14 @@ window.addEventListener('keyup', (e) => { if (e.code === 'Space') stopRec(); });
 
 (function init() {
   const n = new Date();
-  viewYear = n.getFullYear(); viewMonth = n.getMonth();
+  const ukParts = new Intl.DateTimeFormat('en-GB', { timeZone: TZ, year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', hour12:false }).formatToParts(n);
+  const get = (t) => ukParts.find(p => p.type === t).value;
+  viewYear = parseInt(get('year'),10); viewMonth = parseInt(get('month'),10) - 1;
   selectedKey = dateKey(n);
-  const h = n.getHours();
+  const h = parseInt(get('hour'),10);
   const greet = h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
   $('#greeting').textContent = greet + ', Sanyam.';
-  $('#dateline').textContent = n.toLocaleDateString('en-GB', { weekday:'long', day:'2-digit', month:'long', year:'numeric' });
+  $('#dateline').textContent = n.toLocaleDateString('en-GB', { timeZone: TZ, weekday:'long', day:'2-digit', month:'long', year:'numeric' }) + ' · UK time';
   loadState(); loadDrafts(); loadAgents();
   setInterval(loadState, 30000);
 })();
