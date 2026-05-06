@@ -7,6 +7,7 @@ import { runQuery } from "../pipeline/query.js";
 import { previewAndSave, generateSubagent, saveSubagent, SubagentSpec } from "../lib/agent-generator.js";
 import { transcribeWithVoxtral } from "../lib/voxtral.js";
 import { hermesIconPng } from "../lib/icon.js";
+import { gmailClient, googleConfigured } from "../lib/google.js";
 
 export const dashboard = new Hono();
 
@@ -91,6 +92,44 @@ dashboard.use("/api/*", async (c, next) => {
 dashboard.use("/", async (c, next) => {
   if (!requireAuth(c)) return c.redirect("/login");
   await next();
+});
+
+dashboard.get("/api/gmail-status", async (c) => {
+  if (!googleConfigured()) {
+    return c.json({ ok: false, configured: false, error: "GMAIL_CLIENT_ID / GMAIL_CLIENT_SECRET / GMAIL_REFRESH_TOKEN not all set" });
+  }
+  try {
+    const gmail = gmailClient();
+    const profile = await gmail.users.getProfile({ userId: "me" });
+    const unread = await gmail.users.messages.list({ userId: "me", q: "is:unread -from:me", maxResults: 5 });
+    const recent = await gmail.users.messages.list({ userId: "me", maxResults: 5 });
+    let recentSubjects: string[] = [];
+    if (recent.data.messages) {
+      const detailed = await Promise.all(
+        recent.data.messages.slice(0, 5).map((m) =>
+          gmail.users.messages.get({ userId: "me", id: m.id!, format: "metadata", metadataHeaders: ["Subject", "From", "Date"] }),
+        ),
+      );
+      recentSubjects = detailed.map((d) => {
+        const hs = d.data.payload?.headers ?? [];
+        const get = (n: string) => hs.find((h) => h.name?.toLowerCase() === n.toLowerCase())?.value ?? "";
+        return `${get("Date")} — ${get("From")} — ${get("Subject")}`;
+      });
+    }
+    return c.json({
+      ok: true,
+      configured: true,
+      emailAddress: profile.data.emailAddress,
+      historyId: profile.data.historyId,
+      messagesTotal: profile.data.messagesTotal,
+      threadsTotal: profile.data.threadsTotal,
+      unreadCount: unread.data.resultSizeEstimate,
+      recent: recentSubjects,
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return c.json({ ok: false, configured: true, error: msg }, 500);
+  }
 });
 
 dashboard.get("/api/state", async (c) => {
