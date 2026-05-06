@@ -4,6 +4,7 @@ import { ingest } from "../pipeline/ingest.js";
 import { triageEmail } from "../pipeline/email-triage.js";
 import { extractAttachment, isExtractableMime } from "../lib/attachments.js";
 import { env } from "@hermes/shared/env";
+import { db } from "@hermes/shared/db";
 
 let timer: NodeJS.Timeout | null = null;
 const POLL_MS = 2 * 60 * 1000;
@@ -44,18 +45,29 @@ function collectAttachments(part: AttPart | undefined, out: AttPart[] = []): Att
 
 const MAX_ATTACHMENT_BYTES = 8 * 1024 * 1024; // 8MB cap per attachment
 
+const GMAIL_LOOKBACK = process.env.GMAIL_LOOKBACK_QUERY ?? "newer_than:7d";
+
 async function pollOnce(): Promise<void> {
   const gmail = gmailClient();
   const list = await gmail.users.messages.list({
     userId: "me",
-    q: "is:unread -from:me",
-    maxResults: 10,
+    q: GMAIL_LOOKBACK,
+    maxResults: 50,
   });
   const messages = list.data.messages ?? [];
   if (messages.length === 0) return;
-  logger.info({ count: messages.length }, "gmail: unread messages");
 
-  for (const m of messages) {
+  // Dedup: skip messages we've already ingested
+  const seen = await db.capture.findMany({
+    where: { channel: "gmail", channelMsgId: { in: messages.map((m) => m.id!).filter(Boolean) } },
+    select: { channelMsgId: true },
+  });
+  const seenIds = new Set(seen.map((s) => s.channelMsgId));
+  const fresh = messages.filter((m) => m.id && !seenIds.has(m.id));
+  logger.info({ total: messages.length, fresh: fresh.length, alreadySeen: seenIds.size }, "gmail: poll");
+  if (fresh.length === 0) return;
+
+  for (const m of fresh) {
     if (!m.id) continue;
     try {
       const full = await gmail.users.messages.get({ userId: "me", id: m.id, format: "full" });
@@ -116,12 +128,6 @@ async function pollOnce(): Promise<void> {
         body: `${fullBody}${attBlock}`,
       }).catch((err) => logger.error({ err: err instanceof Error ? err.message : String(err) }, "gmail: triage failed"));
 
-      // Mark as read
-      await gmail.users.messages.modify({
-        userId: "me",
-        id: m.id,
-        requestBody: { removeLabelIds: ["UNREAD"] },
-      });
     } catch (err) {
       logger.error({ id: m.id, err: err instanceof Error ? err.message : String(err) }, "gmail: process failed");
     }
