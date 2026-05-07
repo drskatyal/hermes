@@ -8,7 +8,7 @@ const EnvSchema = z.object({
 
   XAI_API_KEY: z.string().optional().default(""),
   GEMINI_API_KEY: z.string().optional().default(""),
-  GROK_MODEL: z.string().default("grok-4-3-fast-reasoning"),
+  GROK_MODEL: z.string().default("grok-4.3"),
   GROK_GENERATOR_MODEL: z.string().default("grok-4-3"),
   GEMINI_MODEL: z.string().default("gemini-3-flash-latest"),
   LLM_PRIMARY: z.enum(["grok", "gemini"]).default("grok"),
