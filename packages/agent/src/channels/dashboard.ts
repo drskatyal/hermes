@@ -192,6 +192,14 @@ dashboard.post("/api/capture/audio", async (c) => {
   return c.json({ ...result, transcript: text, reply: replies.join("\n") });
 });
 
+dashboard.get("/api/xai-models", async (c) => {
+  const r = await fetch("https://api.x.ai/v1/models", {
+    headers: { Authorization: `Bearer ${env.XAI_API_KEY}` },
+  });
+  const text = await r.text();
+  return c.text(text, r.ok ? 200 : 500, { "content-type": "application/json" });
+});
+
 dashboard.post("/api/query", async (c) => {
   const body = (await c.req.json().catch(() => null)) as { question?: string } | null;
   if (!body?.question) return c.json({ error: "question required" }, 400);
